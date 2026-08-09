@@ -1,4 +1,4 @@
-from PySide6.QtWidgets import QWidget, QPushButton, QMainWindow, QLabel, QLineEdit, QHBoxLayout, QLabel, QVBoxLayout, QSizePolicy, QInputDialog, QMessageBox, QStackedWidget, QScrollArea
+from PySide6.QtWidgets import QWidget, QPushButton, QFrame, QMainWindow, QLabel, QLineEdit, QHBoxLayout, QLabel, QVBoxLayout, QSizePolicy, QInputDialog, QMessageBox, QStackedWidget, QScrollArea
 from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QPixmap, QIcon, QCursor
 import sys, os
@@ -14,8 +14,6 @@ class ImageView(QWidget):
         self.mlayout = QVBoxLayout(self)
         self.mlayout.setContentsMargins(10, 10, 10, 10)
 
-
-
         # Back button
         self.back_button = QPushButton("Back")
         self.back_button.setFixedHeight(40)
@@ -25,7 +23,7 @@ class ImageView(QWidget):
         # Image
         self.image_label = QLabel()
         self.image_label.setMinimumSize(0, 0)
-        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.image_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.image_label.setSizePolicy(
             QSizePolicy.Policy.Ignored,
             QSizePolicy.Policy.Ignored
@@ -34,9 +32,14 @@ class ImageView(QWidget):
         self.image_name = QLabel()
         self.image_name.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-        self.mlayout.addWidget(self.image_name)
-        self.mlayout.addWidget(self.image_label)
-        self.mlayout.addWidget(self.back_button, 1)
+        self.mlayout.addWidget(self.image_name, 0)
+        self.mlayout.addWidget(self.image_label, 1)
+        self.mlayout.addWidget(self.back_button, 0)
+
+        # Right-side UI with info
+        self.right_ui = QFrame()
+        self.right_ui.setFrameShape(QFrame.Shape.Box)
+        self.right_layout = QVBoxLayout(self.right_ui)
 
     def view_image(self, img):
         self.image_name.setText(f"{img.name}")

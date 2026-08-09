@@ -10,6 +10,7 @@ from login import LoginWindow, NewAccountWindow
 from util import AutoScalingLabel
 from dataloader import UploadImages
 from imgutil import ImageView
+from audioutil import MusicLoop
 
 SAVED_USER_DATA = ""
 INSTALL_LOCATION = Path(__file__).resolve().parent.parent
@@ -242,20 +243,38 @@ class MainController(QMainWindow):
         self.user_folder = INSTALL_LOCATION
 
         ### INSTANTIATE OBJECTS
-        self.sw = QStackedWidget()
-        self.setCentralWidget(self.sw)
-        self.setMinimumSize(0, 0)
 
+        # Central widget
+        central = QWidget()
+        self.setCentralWidget(central)
+        self.setMinimumSize(0, 0)
+        layout = QVBoxLayout(central)
+
+        # Stacked widget
+        self.sw = QStackedWidget()
+        layout.addWidget(self.sw, 1)
+
+        # Pages
+            # Instantiate
         self.login_page = LoginWindow(self)
         self.create_account_page = NewAccountWindow(self)
         self.home = MainWindow(self)
         self.image_viewer = ImageView(self)
-
+            # Add to stacked widget
         self.sw.addWidget(self.login_page) # 0
         self.sw.addWidget(self.create_account_page) # 1
         self.sw.addWidget(self.home) # 2
         self.sw.addWidget(self.image_viewer) # 3
 
+        # Audio
+            # Instantiate
+        self.music_folder = INSTALL_LOCATION / "assets" / "music"
+        self.music_folder.mkdir(parents=True, exist_ok=True)
+        self.volume = 1.0
+        self.music = MusicLoop(self.music_folder, self.volume)
+        layout.addWidget(self.music, 0, Qt.AlignmentFlag.AlignLeft)
+            # Controls
+        
 
     def switch_page(self, index):
         self.sw.setCurrentIndex(index)
