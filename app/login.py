@@ -89,7 +89,7 @@ class LoginWindow(QMainWindow):
                 self, "Success",
                 f"Login successful for {username}"
             )
-            self.controller.switch_page(2)
+            self.controller.switch_page(4)
         else:
             QMessageBox.critical(
                 self, "Failure",

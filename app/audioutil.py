@@ -1,16 +1,21 @@
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
-from PySide6.QtCore import QUrl
-from PySide6.QtWidgets import QWidget, QPushButton, QHBoxLayout
+from PySide6.QtCore import QUrl, Qt
+from PySide6.QtWidgets import QWidget, QPushButton, QHBoxLayout, QVBoxLayout, QMainWindow
 import random
 
 SONG_EXTS = {".mp3", ".wav", ".flac", ".m4a"}
 
-class MusicLoop(QWidget):
-    def __init__(self, musicdir, volume, parent=None):
-        super(MusicLoop, self).__init__(parent)
+class MusicLoop(QMainWindow):
+    def __init__(self, musicdir, volume, controller):
+        super(MusicLoop, self).__init__(controller)
+
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        layout = QVBoxLayout(central_widget)
 
         self.play_button = QPushButton("Play/Pause")
-        self.play_button.clicked.connect(self.play_or_pause)
+        self.play_button.clicked.connect(lambda: self.play_or_pause())
+        layout.addWidget(self.play_button, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignHCenter)
 
         self.player = QMediaPlayer(self)
         self.audio_output = QAudioOutput()
@@ -29,8 +34,10 @@ class MusicLoop(QWidget):
     def play_or_pause(self):
         if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
             self.player.pause()
+            print("Pausing")
         else:
             self.player.play()
+            print("Playing")
 
     def stop(self):
         self.player.stop()

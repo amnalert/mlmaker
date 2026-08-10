@@ -11,12 +11,13 @@ from util import AutoScalingLabel
 from dataloader import UploadImages
 from imgutil import ImageView
 from audioutil import MusicLoop
+from project_explorer import ProjectExplorer
 
 SAVED_USER_DATA = ""
 INSTALL_LOCATION = Path(__file__).resolve().parent.parent
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
-class MainWindow(QMainWindow):
+class ProjectWindow(QMainWindow):
     def __init__(self, controller):
         super().__init__()
         self.controller = controller
@@ -25,7 +26,6 @@ class MainWindow(QMainWindow):
 
         # User info
         self.username = self.controller.username
-        self.user_folder = self.controller.user_folder
 
         # Images
         self.images = []
@@ -62,7 +62,7 @@ class MainWindow(QMainWindow):
         self.scroll_content = QWidget()
         self.scroll_layout = QGridLayout(self.scroll_content)
         self.scroll_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self.scroll_layout.setSpacing(1)
+        self.scroll_layout.setSpacing(5)
         for i in range(8):
             self.scroll_layout.setColumnStretch(i, 1)
         for i in range(6):
@@ -101,20 +101,22 @@ class MainWindow(QMainWindow):
         self.page_layout.addWidget(self.image_count_label)
         self.page_layout.addWidget(self.image_count_input)
 
-        # Load saved images
-        self.load_images_btn = QPushButton("Load saved user images")
-        self.load_images_btn.clicked.connect(self.load_saved_images)
-        self.page_layout.addWidget(self.load_images_btn)
+        # Exit project
+        self.back_btn = QPushButton("Back")
+        self.back_btn.setFixedHeight(40)
+        self.back_btn.clicked.connect(lambda: self.controller.switch_page(4))
+        self.back_btn.clicked.connect(lambda: self.controller.home.update_image_page)
 
-    def load_saved_images(self):
-        if self.user_folder.exists() and self.user_folder.is_dir():
+    def load_saved_images(self, prj):
+        self.prj_folder = INSTALL_LOCATION / "users" / self.username / prj
+        if self.prj_folder.exists() and self.prj_folder.is_dir():
+            img_uploads = self.prj_folder / "image_uploads"
+            img_uploads.mkdir(parents=True, exist_ok=True)
             imgs = [
-                p for p in self.user_folder.iterdir()
+                p for p in img_uploads.iterdir()
                 if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS
             ]
             self.show_images(imgs)
-        else:
-            QMessageBox.warning(self, f"User: {self.username}", "No images found in user folder. Upload images first.")
 
     def show_images(self, img_list):
         self.images = img_list
@@ -128,8 +130,6 @@ class MainWindow(QMainWindow):
             self.current_page * self.images_per_page:
             (self.current_page + 1) * self.images_per_page
         ]
-
-        width = self.scroll_imgs.viewport().width()
 
         num_images = len(page_images)
         if num_images == 0:
@@ -232,6 +232,9 @@ class MainWindow(QMainWindow):
         if self.images:
             self.update_image_page()
 
+    def load_project(self, prj):
+        self.load_saved_images(prj)
+
 class MainController(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -240,7 +243,6 @@ class MainController(QMainWindow):
 
         # User variables
         self.username = ""
-        self.user_folder = INSTALL_LOCATION
 
         ### INSTANTIATE OBJECTS
 
@@ -254,40 +256,52 @@ class MainController(QMainWindow):
         self.sw = QStackedWidget()
         layout.addWidget(self.sw, 1)
 
+        # Audio
+        self.music_folder = INSTALL_LOCATION / "assets" / "music"
+        self.music_folder.mkdir(parents=True, exist_ok=True)
+        self.volume = 1.0
+        self.music = MusicLoop(self.music_folder, self.volume, self)
+        layout.addWidget(self.music)
+
+        # Logout
+        self.logout_button = QPushButton("Exit")
+        self.logout_button.clicked.connect(lambda: self.logout())
+        layout.addWidget(self.logout_button, alignment=Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignLeft)
+
         # Pages
             # Instantiate
         self.login_page = LoginWindow(self)
         self.create_account_page = NewAccountWindow(self)
-        self.home = MainWindow(self)
+        self.home = ProjectWindow(self)
         self.image_viewer = ImageView(self)
+        self.proj_explorer = ProjectExplorer(self)
             # Add to stacked widget
         self.sw.addWidget(self.login_page) # 0
         self.sw.addWidget(self.create_account_page) # 1
         self.sw.addWidget(self.home) # 2
         self.sw.addWidget(self.image_viewer) # 3
+        self.sw.addWidget(self.proj_explorer) # 4
 
-        # Audio
-            # Instantiate
-        self.music_folder = INSTALL_LOCATION / "assets" / "music"
-        self.music_folder.mkdir(parents=True, exist_ok=True)
-        self.volume = 1.0
-        self.music = MusicLoop(self.music_folder, self.volume)
-        layout.addWidget(self.music, 0, Qt.AlignmentFlag.AlignLeft)
-            # Controls
-        
+        self.sw.setCurrentIndex(0)
 
     def switch_page(self, index):
         self.sw.setCurrentIndex(index)
+        if self.sw.currentIndex() == 0:
+            self.logout_button.setText("Exit")
+        else:
+            self.logout_button.setText("Logout")
 
     def receive_user_data(self, data: dict):
         #cud = current user data
         self.cud = data
         self.username = str(self.cud.get('username'))
+        self.home.username = self.username
         print(f"Welcome user: {self.username}")
         print(f"Access date: {self.cud.get('access_date')}")
         self.load_user_data(data)
         self.home.show_user.setText(self.username)
         self.user_folder = INSTALL_LOCATION / "users" / self.username
+        self.proj_explorer.load_saved_pjs()
 
     def load_user_data(self, data: dict):
         SAVED_USER_DATA = INSTALL_LOCATION / "users" / self.username / "user_data.json"
@@ -331,6 +345,14 @@ class MainController(QMainWindow):
 
         except Exception as e:
             print(f"Failed to access user data: {e}")
+
+    def logout(self):
+        if self.sw.currentIndex() == 0:
+            QApplication.quit()
+        else:
+            self.username = ""
+            self.user_folder = ""
+            self.switch_page(0)
 
 
 if __name__ == "__main__":
