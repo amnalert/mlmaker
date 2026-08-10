@@ -256,17 +256,22 @@ class MainController(QMainWindow):
         self.sw = QStackedWidget()
         layout.addWidget(self.sw, 1)
 
+        # Bottom controls layout
+        bottom_layout = QHBoxLayout()
+        
         # Audio
         self.music_folder = INSTALL_LOCATION / "assets" / "music"
         self.music_folder.mkdir(parents=True, exist_ok=True)
         self.volume = 1.0
         self.music = MusicLoop(self.music_folder, self.volume, self)
-        layout.addWidget(self.music)
+        bottom_layout.addWidget(self.music)
 
         # Logout
         self.logout_button = QPushButton("Exit")
         self.logout_button.clicked.connect(lambda: self.logout())
-        layout.addWidget(self.logout_button, alignment=Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignLeft)
+        bottom_layout.addWidget(self.logout_button, alignment=Qt.AlignmentFlag.AlignRight)
+        
+        layout.addLayout(bottom_layout)
 
         # Pages
             # Instantiate

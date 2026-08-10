@@ -1,5 +1,5 @@
 from PySide6.QtWidgets import QApplication, QHBoxLayout, QInputDialog, QGridLayout, QMainWindow, QWidget, QVBoxLayout, QLineEdit, QPushButton, QLabel, QMessageBox, QScrollArea
-from PySide6.QtCore import QSize, Signal, Qt
+from PySide6.QtCore import QSize, Signal, Qt, QTimer
 from PySide6.QtGui import QCursor
 import math
 from pathlib import Path
@@ -28,7 +28,7 @@ class ProjectExplorer(QMainWindow):
         self.setCentralWidget(central_widget)
         self.mlayout = QVBoxLayout(central_widget)
         central_widget.setLayout(self.mlayout)
-        self.mlayout.setSpacing(10)
+        self.mlayout.setSpacing(0)
 
         # Page layout 
         self.page_layout = QHBoxLayout()
@@ -69,13 +69,17 @@ class ProjectExplorer(QMainWindow):
             )
         )
 
-        # Create new project
+        # Create new project and footer layout
+        self.footer_layout = QHBoxLayout()
+        self.footer_layout.addStretch()
         self.create_prj_btn = QPushButton("Create project")
-        self.create_prj_btn.setFixedSize(200, 125)
+        self.create_prj_btn.setFixedSize(200, 50)
         self.create_prj_btn.clicked.connect(lambda: self.create_project())
-        self.mlayout.addWidget(self.create_prj_btn, Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight)
+        self.footer_layout.addWidget(self.create_prj_btn)
+        self.mlayout.addLayout(self.footer_layout)
 
     def load_saved_pjs(self):
+        print("Loading saved projects...")
         self.user_folder = self.controller.user_folder
         if self.user_folder.exists() and self.user_folder.is_dir():
             self.prj_folder = self.user_folder / "projects"
@@ -108,7 +112,7 @@ class ProjectExplorer(QMainWindow):
         for index, prj in enumerate(page_pjs):
             prj_btn = QPushButton(self.scroll_content)
             prj_btn.setText(prj.name)
-            prj_btn.setFixedSize(self.scroll_pjs.viewport().width() - 200, 50)
+            prj_btn.setMaximumSize(self.scroll_pjs.viewport().width(), 30)
 
             prj_btn.clicked.connect(lambda: self.open_project(prj))
             self.scroll_layout.addWidget(prj_btn)
