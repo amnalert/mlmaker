@@ -85,10 +85,6 @@ class LoginWindow(QMainWindow):
                 "access_date": str(datetime.now())
             }
             self.controller.receive_user_data(payload)
-            QMessageBox.information(
-                self, "Success",
-                f"Login successful for {username}"
-            )
             self.controller.switch_page(4)
         else:
             QMessageBox.critical(

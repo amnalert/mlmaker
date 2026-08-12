@@ -6,17 +6,20 @@ import shutil
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
 class UploadImages(QPushButton):
-    def __init__(self, parent, controller):
+    def __init__(self, parents, controller):
         super().__init__("Upload Images")
         self.controller = controller
-        self.parent_widget = parent
+        self.parent_widget = parents
+
+        self.project = ""
 
         self.clicked.connect(self.open_dialog)
         self.images = []
 
     def open_dialog(self):
+        self.project = self.parent_widget.project
         files = ImageLoader().load_files(self)
-        save_location = Path(self.controller.user_folder) / "image_uploads"
+        save_location = Path(self.controller.user_folder) / self.parent_widget.project / "image_uploads"
         save_location.mkdir(parents=True, exist_ok=True)
         if files:
             for file in files:
@@ -49,7 +52,7 @@ class UploadImages(QPushButton):
                 elif path.suffix.lower() in IMAGE_EXTENSIONS:
                     self.images.append(dest)
                     shutil.copy2(path, dest)
-        self.parent_widget.show_images(self.images)
+        self.parent_widget.load_saved_images(self.images)
 
 class ImageLoader:
     def load_files(self, parent):

@@ -1,3 +1,4 @@
 *.jpg
 users/
 app/__pycache__/
+assets/music

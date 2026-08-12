@@ -3,6 +3,7 @@ from PySide6.QtCore import QSize, Signal, Qt, QTimer
 from PySide6.QtGui import QCursor
 import math
 from pathlib import Path
+from functools import partial
 
 class ProjectExplorer(QMainWindow):
     def __init__(self, controller):
@@ -79,7 +80,6 @@ class ProjectExplorer(QMainWindow):
         self.mlayout.addLayout(self.footer_layout)
 
     def load_saved_pjs(self):
-        print("Loading saved projects...")
         self.user_folder = self.controller.user_folder
         if self.user_folder.exists() and self.user_folder.is_dir():
             self.prj_folder = self.user_folder / "projects"
@@ -109,24 +109,51 @@ class ProjectExplorer(QMainWindow):
             self.page_lbl.setText("No projects. Create one with the 'Create projects' button.")
             return
         
-        for index, prj in enumerate(page_pjs):
+        for prj in page_pjs:
+            # Container for project button and delete button
+            prj_container = QWidget()
+            prj_container_layout = QHBoxLayout(prj_container)
+            prj_container_layout.setContentsMargins(0, 0, 0, 0)
+            prj_container_layout.setSpacing(5)
+            
             prj_btn = QPushButton(self.scroll_content)
             prj_btn.setText(prj.name)
-            prj_btn.setMaximumSize(self.scroll_pjs.viewport().width(), 30)
+            prj_btn.setMaximumSize(self.scroll_pjs.viewport().width() - 80, 30)
 
-            prj_btn.clicked.connect(lambda: self.open_project(prj))
-            self.scroll_layout.addWidget(prj_btn)
+            prj_btn.clicked.connect(partial(self.open_project, prj))
+            
+            delete_btn = QPushButton("Delete")
+            delete_btn.setFixedSize(60, 30)
+            delete_btn.clicked.connect(partial(self.delete_project, prj))
+            
+            prj_container_layout.addWidget(prj_btn)
+            prj_container_layout.addWidget(delete_btn)
+            
+            self.scroll_layout.addWidget(prj_container)
 
         self.update_pagination_controls()
 
     def open_project(self, prj):
         self.controller.switch_page(2)
-        self.controller.home.load_project(prj)
+        self.controller.home.load_saved_images(prj)
+
+    def delete_project(self, prj):
+        reply = QMessageBox.question(
+            self,
+            "Delete Project",
+            f"Are you sure you want to delete '{prj.name}'?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            import shutil
+            shutil.rmtree(prj)
+            self.load_saved_pjs()
 
     def previous_page(self):
         if self.current_page > 0:
             self.current_page -= 1
-            self.update_prj_page()
+            self.load_saved_pjs()
 
     def next_page(self):
         total_pages = math.ceil(
@@ -135,7 +162,7 @@ class ProjectExplorer(QMainWindow):
 
         if self.current_page < total_pages - 1:
             self.current_page += 1
-            self.update_prj_page()
+            self.load_saved_pjs()
 
     def update_pagination_controls(self):
         total_pages = math.ceil(
@@ -161,7 +188,7 @@ class ProjectExplorer(QMainWindow):
         if ok_pressed and prj_name != '':
             new_prj_folder = self.prj_folder / prj_name
             new_prj_folder.mkdir(parents=True, exist_ok=True)
-        self.update_prj_page()
+            self.load_saved_pjs()
 
     def clear_prjs(self):
         while self.scroll_layout.count():
@@ -176,4 +203,4 @@ class ProjectExplorer(QMainWindow):
         super().resizeEvent(event)
 
         if len(self.projects) > 0:
-            self.update_prj_page()
+            self.load_saved_pjs()

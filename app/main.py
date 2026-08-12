@@ -32,10 +32,12 @@ class ProjectWindow(QMainWindow):
         self.images_per_page = 20
         self.current_page = 0
 
+        # Projects
+        self.project = ""
+
         ### WINDOW SIZING
 
         # Main window
-        self.setWindowTitle("ML Maker 1.0.0")
         self.setMinimumSize(QSize(600, 450))
         current_screen = QApplication.screenAt(QCursor.pos())
         if not current_screen:
@@ -105,10 +107,13 @@ class ProjectWindow(QMainWindow):
         self.back_btn = QPushButton("Back")
         self.back_btn.setFixedHeight(40)
         self.back_btn.clicked.connect(lambda: self.controller.switch_page(4))
-        self.back_btn.clicked.connect(lambda: self.controller.home.update_image_page)
+        self.back_btn.clicked.connect(lambda: self.update_image_page)
+        self.page_layout.addWidget(self.back_btn)
 
     def load_saved_images(self, prj):
         self.prj_folder = INSTALL_LOCATION / "users" / self.username / prj
+        #print(f"Loading project images: {self.prj_folder}")
+        self.project = prj
         if self.prj_folder.exists() and self.prj_folder.is_dir():
             img_uploads = self.prj_folder / "image_uploads"
             img_uploads.mkdir(parents=True, exist_ok=True)
@@ -119,7 +124,7 @@ class ProjectWindow(QMainWindow):
             self.show_images(imgs)
 
     def show_images(self, img_list):
-        self.images = img_list
+        self.images = [f for f in img_list if Path(f).is_file()]
         self.current_page = 0
         self.update_image_page()
 
@@ -147,6 +152,9 @@ class ProjectWindow(QMainWindow):
         thumb_height = area_height // rows
 
         for index, img in enumerate(page_images):
+            if not Path(img).is_file():
+                continue
+
             row = index // columns
             column = index % columns
 
@@ -232,12 +240,10 @@ class ProjectWindow(QMainWindow):
         if self.images:
             self.update_image_page()
 
-    def load_project(self, prj):
-        self.load_saved_images(prj)
-
 class MainController(QMainWindow):
     def __init__(self):
         super().__init__()
+        self.setWindowTitle("ML Maker 1.0.0")
 
         ### INITIALIZE VARIABLES
 
@@ -262,7 +268,7 @@ class MainController(QMainWindow):
         # Audio
         self.music_folder = INSTALL_LOCATION / "assets" / "music"
         self.music_folder.mkdir(parents=True, exist_ok=True)
-        self.volume = 1.0
+        self.volume = 0.25
         self.music = MusicLoop(self.music_folder, self.volume, self)
         bottom_layout.addWidget(self.music)
 

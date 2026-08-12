@@ -1,4 +1,4 @@
-from PySide6.QtWidgets import QWidget, QPushButton, QFrame, QMainWindow, QLabel, QLineEdit, QHBoxLayout, QLabel, QVBoxLayout, QSizePolicy, QInputDialog, QMessageBox, QStackedWidget, QScrollArea
+from PySide6.QtWidgets import QWidget, QPushButton, QComboBox, QFrame, QMainWindow, QLabel, QLineEdit, QHBoxLayout, QLabel, QVBoxLayout, QSizePolicy, QInputDialog, QMessageBox, QStackedWidget, QScrollArea
 from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QPixmap, QIcon, QCursor
 import sys, os
@@ -11,8 +11,13 @@ class ImageView(QWidget):
         super().__init__()
         self.controller = controller
 
-        self.mlayout = QVBoxLayout(self)
-        self.mlayout.setContentsMargins(10, 10, 10, 10)
+        main_layout = QHBoxLayout()
+
+        ### Image stuff
+
+        imglayout = QVBoxLayout()
+        imglayout.setContentsMargins(10, 10, 10, 10)
+        main_layout.addLayout(imglayout)
 
         # Back button
         self.back_button = QPushButton("Back")
@@ -29,17 +34,21 @@ class ImageView(QWidget):
             QSizePolicy.Policy.Ignored
         )
 
+        imglayout.addWidget(self.image_label, 1)
+        imglayout.addWidget(self.back_button, 0)
+
+        ### Right-side UI
+
+        right_layout = QVBoxLayout()
+        main_layout.addLayout(right_layout)
+
+        # Top to bottom
         self.image_name = QLabel()
-        self.image_name.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.image_name.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
+        right_layout.addWidget(self.image_name)
 
-        self.mlayout.addWidget(self.image_name, 0)
-        self.mlayout.addWidget(self.image_label, 1)
-        self.mlayout.addWidget(self.back_button, 0)
-
-        # Right-side UI with info
-        self.right_ui = QFrame()
-        self.right_ui.setFrameShape(QFrame.Shape.Box)
-        self.right_layout = QVBoxLayout(self.right_ui)
+        self.species_list = QComboBox()
+        right_layout.addWidget(self.species_list)
 
     def view_image(self, img):
         self.image_name.setText(f"{img.name}")
