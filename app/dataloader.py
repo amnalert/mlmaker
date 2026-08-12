@@ -52,7 +52,7 @@ class UploadImages(QPushButton):
                 elif path.suffix.lower() in IMAGE_EXTENSIONS:
                     self.images.append(dest)
                     shutil.copy2(path, dest)
-        self.parent_widget.load_saved_images(self.images)
+        self.parent_widget.load_saved_images(self.project)
 
 class ImageLoader:
     def load_files(self, parent):

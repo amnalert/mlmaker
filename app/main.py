@@ -34,6 +34,7 @@ class ProjectWindow(QMainWindow):
 
         # Projects
         self.project = ""
+        self.project_classes = []
 
         ### WINDOW SIZING
 
@@ -53,6 +54,11 @@ class ProjectWindow(QMainWindow):
 
         self.upload_imgs = UploadImages(self, self.controller)
         self.mlayout.addWidget(self.upload_imgs, alignment=Qt.AlignmentFlag.AlignBottom)
+
+        # Species information for this project
+        self.edit_class_btn = QPushButton("Edit class list")
+        self.edit_class_btn.clicked.connect(self.edit_class_list)
+        self.mlayout.addWidget(self.edit_class_btn, alignment=(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom))
 
         # Showing images
         self.scroll_imgs = QScrollArea(self)
@@ -122,6 +128,8 @@ class ProjectWindow(QMainWindow):
                 if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS
             ]
             self.show_images(imgs)
+            with open((self.prj_folder / "class_list.txt"), "r") as f:
+                self.project_classes = f.read().strip().split(',')
 
     def show_images(self, img_list):
         self.images = [f for f in img_list if Path(f).is_file()]
@@ -209,7 +217,7 @@ class ProjectWindow(QMainWindow):
     def inspect_img(self, image):
         if image:
             self.controller.switch_page(3)
-            self.controller.image_viewer.view_image(image)
+            self.controller.image_viewer.view_image(image, self.prj_folder)
 
     def previous_page(self):
         if self.current_page > 0:
@@ -233,6 +241,25 @@ class ProjectWindow(QMainWindow):
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
+
+    def edit_class_list(self):
+        class_file = self.prj_folder / "class_list.txt"
+        class_file.touch()
+        with open(class_file, "r") as f:
+            content = f.read().strip()
+            
+        class_input, ok = QInputDialog().getText(self, "Edit Classes","Type the name of each class separated by a comma:", QLineEdit.EchoMode.Normal, content if content else "")
+        if class_input != "":
+            with open(class_file, "w") as f:
+                f.write(class_input)
+            self.project_classes = class_input.strip().split(',')
+        else:
+            QMessageBox.warning(
+                self,
+                "",
+                "You must add at least one object class. Simply type 'object' if you only have 1 class."
+            )
+            self.edit_class_list()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

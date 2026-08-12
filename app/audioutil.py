@@ -49,7 +49,8 @@ class MusicLoop(QWidget):
 
         self.songs = [path for path in musicdir.iterdir() if path.is_file() and path.suffix.lower() in SONG_EXTS]
         if not self.songs:
-            print(f"No songs found. Place songs in {INSTALL_LOCATION / "assets" / "music"}")
+            music_folder = INSTALL_LOCATION / "assets" / "music"
+            print(f"No songs found. Place songs in {music_folder}.")
         self.queue = self.songs.copy()
         random.shuffle(self.queue)
         self.song_index = 0
@@ -61,7 +62,7 @@ class MusicLoop(QWidget):
         self.player.errorOccurred.connect(self._error)
 
         self.media_devices = QMediaDevices()
-        self.media_devices.audioOutputsChanged.connect(self.audio_dev_change)
+        #self.media_devices.audioOutputsChanged.connect(self.audio_dev_change)
         self.em_pause = False
 
         self.startup = True

@@ -186,9 +186,10 @@ class ProjectExplorer(QMainWindow):
     def create_project(self):
         prj_name, ok_pressed = QInputDialog().getText(self, "Create Project","Project name:", QLineEdit.EchoMode.Normal, "")
         if ok_pressed and prj_name != '':
-            new_prj_folder = self.prj_folder / prj_name
+            new_prj_folder = Path(self.prj_folder / prj_name)
             new_prj_folder.mkdir(parents=True, exist_ok=True)
-            self.load_saved_pjs()
+            self.open_project(new_prj_folder)
+            self.controller.home.edit_class_list()
 
     def clear_prjs(self):
         while self.scroll_layout.count():
