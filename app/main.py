@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import QApplication, QGridLayout, QWidget, QPushButton, QMainWindow, QLabel, QLineEdit, QHBoxLayout, QLabel, QVBoxLayout, QSizePolicy, QInputDialog, QMessageBox, QStackedWidget, QScrollArea
 from PySide6.QtCore import QSize, Qt, QTimer
-from PySide6.QtGui import QPixmap, QIcon, QFontMetrics, QCursor, QIntValidator
+from PySide6.QtGui import QPixmap, QIcon, QFontMetrics, QCursor, QIntValidator, QFont
 import sys, os
 import json
 import math
@@ -8,7 +8,7 @@ from pathlib import Path
 
 from login import LoginWindow, NewAccountWindow
 from util import AutoScalingLabel
-from dataloader import UploadImages
+from dataloader import UploadImages, UploadLabels
 from imgutil import ImageView
 from audioutil import MusicLoop
 from project_explorer import ProjectExplorer
@@ -32,9 +32,10 @@ class ProjectWindow(QMainWindow):
         self.images_per_page = 20
         self.current_page = 0
 
-        # Projects
+        # Project
         self.project = ""
         self.project_classes = []
+        self.labels_without_images = []
 
         ### WINDOW SIZING
 
@@ -50,10 +51,25 @@ class ProjectWindow(QMainWindow):
 
         ### INSTANTIATE OBJECTS
         self.show_user = QLabel("")
+        self.show_project = QLabel("")
         self.mlayout.addWidget(self.show_user, alignment=Qt.AlignmentFlag.AlignTop) 
+        self.mlayout.addWidget(self.show_project, alignment=Qt.AlignmentFlag.AlignTop) 
 
         self.upload_imgs = UploadImages(self, self.controller)
         self.mlayout.addWidget(self.upload_imgs, alignment=Qt.AlignmentFlag.AlignBottom)
+
+        self.upload_labels = UploadLabels(self, self.controller)
+        self.mlayout.addWidget(self.upload_labels, alignment=Qt.AlignmentFlag.AlignBottom)
+
+        self.labels_without_images_label = QLabel("Labels missing images: 0")
+        self.pt16 = QFont()
+        self.pt16.setPointSize(16)
+        self.labels_without_images_label.setFont(self.pt16)
+        self.view_missing_images_list = QPushButton("View Unmatched Label Files")
+        self.view_missing_images_list.setEnabled(False)
+        self.view_missing_images_list.clicked.connect(lambda: self.view_missing_images(self.labels_without_images))
+        self.mlayout.addWidget(self.labels_without_images_label, alignment=Qt.AlignmentFlag.AlignBottom)
+        self.mlayout.addWidget(self.view_missing_images_list, alignment=Qt.AlignmentFlag.AlignBottom)
 
         # Species information for this project
         self.edit_class_btn = QPushButton("Edit class list")
@@ -132,6 +148,8 @@ class ProjectWindow(QMainWindow):
             cls_list.touch()
             with open(cls_list, "r") as f:
                 self.project_classes = f.read().strip().split(',')
+        self.show_project.setText(f"Project: {prj.name}")
+        self.check_uploaded_labels()
 
     def show_images(self, img_list):
         self.images = [f for f in img_list if Path(f).is_file()]
@@ -263,6 +281,36 @@ class ProjectWindow(QMainWindow):
             )
             self.edit_class_list()
 
+    def check_uploaded_labels(self):
+        image_uploads = Path(self.project) / "image_uploads"
+        image_labels = Path(self.project) / "image_labels"
+        self.labels_without_images = []
+        for label in image_labels.iterdir():
+            label_has_corresponding_image = False
+            for image in image_uploads.iterdir():
+                if Path(image).stem == Path(label).stem:
+                    label_has_corresponding_image = True
+                    break
+
+            if not label_has_corresponding_image:
+                self.labels_without_images.append(label)
+
+        if len(self.labels_without_images) > 0:
+            self.view_missing_images(self.labels_without_images)
+            self.view_missing_images_list.setEnabled(True)
+        else:
+            self.view_missing_images_list.setEnabled(False)
+
+        self.labels_without_images_label.setText(f"Labels missing images: {len(self.labels_without_images)}")
+
+    def view_missing_images(self, labels):
+        labels_str = "\n".join([str(label.name) for label in labels])
+        QMessageBox.warning(
+                self,
+                "Warning",
+                f"The following labels do not have corresponding images. Please upload the images that correspond(with the same file name, e.g., image.jpg and image.txt) in order to view the label information.\n\n{labels_str}"
+            )
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
 
@@ -339,7 +387,7 @@ class MainController(QMainWindow):
         print(f"Welcome user: {self.username}")
         print(f"Access date: {self.cud.get('access_date')}")
         self.load_user_data(data)
-        self.home.show_user.setText(self.username)
+        self.home.show_user.setText(f"User: {self.username}")
         self.user_folder = INSTALL_LOCATION / "users" / self.username
         self.proj_explorer.load_saved_pjs()
 
