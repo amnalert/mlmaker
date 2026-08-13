@@ -128,7 +128,9 @@ class ProjectWindow(QMainWindow):
                 if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS
             ]
             self.show_images(imgs)
-            with open((self.prj_folder / "class_list.txt"), "r") as f:
+            cls_list = self.prj_folder / "class_list.txt"
+            cls_list.touch()
+            with open(cls_list, "r") as f:
                 self.project_classes = f.read().strip().split(',')
 
     def show_images(self, img_list):

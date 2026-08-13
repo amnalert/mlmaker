@@ -6,7 +6,7 @@ import json
 import math
 from pathlib import Path
 
-from crosshair import ImageLabellingControls
+from labelling_controls import ImageLabellingControls
 
 class ImageView(QWidget):
     def __init__(self, controller):
@@ -16,6 +16,7 @@ class ImageView(QWidget):
         self.project = ""
         self.species = []
         self.image_label_file = ""
+        self.default_class = "none"
 
         main_layout = QHBoxLayout(self)
 
@@ -35,13 +36,21 @@ class ImageView(QWidget):
         # Image
         self.image_label = QLabel()
         self.image_label.setMinimumSize(QSize(10, 10))
-        self.image_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.image_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+        self.image_scroll_area = QScrollArea()
+        self.image_scroll_area.setWidget(self.image_label)
+        self.image_scroll_area.setWidgetResizable(True)
+        self.image_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.image_scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.image_scroll_area.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.image_scroll_area.setMinimumSize(QSize(120, 120))
 
         # Crosshair on image hover
         self.img_labelling_controls = ImageLabellingControls(self, self.image_label)
 
-        imglayout.addWidget(self.image_label)
+        imglayout.addWidget(self.image_scroll_area, stretch=1)
         imglayout.addWidget(self.back_button)
 
         ### Right-side UI
@@ -51,9 +60,9 @@ class ImageView(QWidget):
 
         # Top to bottom
         self.image_name = QLabel()
-        self.species_list_dropdown = QComboBox()
         self.box_label_1 = QLabel("Point 1: (0, 0)")
         self.box_label_2 = QLabel("Point 2: (0, 0)")
+        self.mouse_pos_label = QLabel("Mouse: (0, 0)")
 
         # Placed boxes scroll area
         self.scroll_boxes_content = QWidget()
@@ -67,50 +76,61 @@ class ImageView(QWidget):
         self.scroll_boxes.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
             # Resize policies
-        self.species_list_dropdown.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.scroll_boxes.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
             # Add to layout
         right_layout.addWidget(self.image_name, alignment=(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter))
-        right_layout.addWidget(self.species_list_dropdown, alignment=(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter))
         right_layout.addWidget(self.box_label_1, alignment=(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter))
         right_layout.addWidget(self.box_label_2, alignment=(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter))
+        right_layout.addWidget(self.mouse_pos_label, alignment=(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter))
         right_layout.addWidget(self.scroll_boxes, stretch=1)
 
         self.scroll_boxes.setWidget(self.scroll_boxes_content)
-        
+
+        # Default class
+        self.change_default_class_btn = QPushButton("Change default class")
+        self.change_default_class_btn.clicked.connect(self.change_default_class)
+        right_layout.addWidget(self.change_default_class_btn)
+
+    def change_default_class(self):
+        choice, ok = QInputDialog.getItem(
+            self,
+            "Choose default class",
+            "Select a class new boxes will be assigned from the following:",
+            self.species
+        )
+        if ok and choice:
+            self.default_class = choice
+
     def view_image(self, img, prj):
         self.image_name.setText(f"{img.name}")
         self.orig_pixmap = QPixmap(str(img))
         self.project = self.controller.home.project
         self.species = self.controller.home.project_classes
-        self.species_list_dropdown.addItems(self.species)
         self.image_label_file = Path(prj / "image_labels" / f"{img.stem}.txt")
         self.image_label_file.parent.mkdir(parents=True, exist_ok=True)
         self.image_label_file.touch()
 
-        scaled_pixmap = self.orig_pixmap.scaled(
-            self.size(),
-            Qt.AspectRatioMode.KeepAspectRatio, 
-            Qt.TransformationMode.SmoothTransformation
-        )
-
-        self.image_label.setPixmap(scaled_pixmap)
-        self.image_label.setFixedSize(scaled_pixmap.size())
+        self.image_label.setPixmap(self.orig_pixmap)
+        self.update_image()
         self.img_labelling_controls.load_saved_boxes(self.image_label_file)
 
     def update_image(self):
-        if self.orig_pixmap.isNull():
+        if not hasattr(self, "orig_pixmap") or self.orig_pixmap.isNull():
             return
 
-        avail_size = self.image_label.size()
+        available_size = self.image_scroll_area.viewport().size()
+        if available_size.width() <= 0 or available_size.height() <= 0:
+            return
+
         pixmap = self.orig_pixmap.scaled(
-            avail_size,
+            available_size,
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation
         )
 
         self.image_label.setPixmap(pixmap)
+        self.image_label.setFixedSize(pixmap.size())
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

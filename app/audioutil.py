@@ -21,11 +21,13 @@ class MusicLoop(QWidget):
         main_layout.addLayout(label_layout)
 
         self.volume = volume
+        self.musicdir = musicdir
         self.looping = False
 
         self.play_button = QPushButton("Play/Pause")
         self.skip_button = QPushButton("Skip Song")
         self.prev_song_button = QPushButton("Previous Song")
+        self.prev_song_button.setEnabled(False)
         self.loop_button = QPushButton("Loop: False")
         self.play_button.clicked.connect(lambda: self.play_or_pause())
         self.skip_button.clicked.connect(lambda: self.skip_song())
@@ -38,8 +40,10 @@ class MusicLoop(QWidget):
 
         self.song_label = QLabel("Now playing:")
         self.next_song_label = QLabel("Up next:")
+        self.queue_info = QLabel("Queue: (0/0)")
         label_layout.addWidget(self.song_label)
         label_layout.addWidget(self.next_song_label)
+        label_layout.addWidget(self.queue_info)
 
         self.player = QMediaPlayer(self)
         self.audio_output = QAudioOutput()
@@ -47,9 +51,10 @@ class MusicLoop(QWidget):
         self.player.setAudioOutput(self.audio_output)
         self.audio_output.setVolume(volume)
 
-        self.songs = [path for path in musicdir.iterdir() if path.is_file() and path.suffix.lower() in SONG_EXTS]
+        self.songs = [path for path in self.musicdir.iterdir() if path.is_file() and path.suffix.lower() in SONG_EXTS]
         if not self.songs:
             music_folder = INSTALL_LOCATION / "assets" / "music"
+            music_folder.mkdir(parents=True, exist_ok=True)
             print(f"No songs found. Place songs in {music_folder}.")
         self.queue = self.songs.copy()
         random.shuffle(self.queue)
@@ -57,6 +62,7 @@ class MusicLoop(QWidget):
         self.player.setSource(QUrl.fromLocalFile(str(self.queue[self.song_index])))
         self.song_label.setText(f"Now playing: {Path(self.queue[self.song_index]).stem}")
         self.next_song_label.setText(f"Next up: {Path(self.queue[self.song_index + 1]).stem}")
+        self.queue_info.setText(f"Queue: {self.song_index + 1}/{len(self.queue)} Songs")
 
         self.player.mediaStatusChanged.connect(self.next_song)
         self.player.errorOccurred.connect(self._error)
@@ -115,15 +121,16 @@ class MusicLoop(QWidget):
 
     def reset_source(self):
         if self.song_index == 0:
-            self.play_button.setEnabled(False)
+            self.prev_song_button.setEnabled(False)
         else:
-            self.play_button.setEnabled(True)
+            self.prev_song_button.setEnabled(True)
 
-        if self.song_index == len(self.queue) - 2:
+        if self.song_index == len(self.queue) - 1:
             self.next_song_label.setText(f"Songs will reshuffle after this song!")
 
-        elif self.song_index == (len(self.queue) - 1):
+        elif self.song_index == (len(self.queue)):
             #print("End of queue. Reshuffling songs.")
+            self.songs = [path for path in self.musicdir.iterdir() if path.is_file() and path.suffix.lower() in SONG_EXTS]
 
             old_song = self.queue[-1]
 
@@ -144,6 +151,7 @@ class MusicLoop(QWidget):
             self.next_song_label.setText(f"Next up: {Path(self.queue[self.song_index + 1]).stem}")
 
         self.song_label.setText(f"Now playing: {Path(self.queue[self.song_index]).stem}")
+        self.queue_info.setText(f"Queue: {self.song_index + 1}/{len(self.queue)} Songs")
 
         self.player.setSource(
             QUrl.fromLocalFile(str(self.queue[self.song_index]))
