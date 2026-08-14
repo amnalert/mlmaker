@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import QWidget, QGridLayout, QPushButton, QComboBox, QFrame, QMainWindow, QLabel, QLineEdit, QHBoxLayout, QLabel, QVBoxLayout, QSizePolicy, QInputDialog, QMessageBox, QStackedWidget, QScrollArea
 from PySide6.QtCore import QSize, Qt, QTimer, QPoint
-from PySide6.QtGui import QPixmap, QIcon
+from PySide6.QtGui import QPainter, QPixmap, QIcon
 import sys, os
 import json
 import math
@@ -91,6 +91,11 @@ class ImageView(QWidget):
         self.change_default_class_btn = QPushButton("Change default class")
         self.change_default_class_btn.clicked.connect(self.change_default_class)
         right_layout.addWidget(self.change_default_class_btn)
+
+        # Show all boxes
+        self.show_all_boxes_btn = QPushButton("Show all boxes")
+        self.show_all_boxes_btn.clicked.connect(lambda: self.img_labelling_controls._draw_all_boxes())
+        right_layout.addWidget(self.show_all_boxes_btn, alignment=(Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter))
 
     def change_default_class(self):
         choice, ok = QInputDialog.getItem(

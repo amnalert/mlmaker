@@ -1,4 +1,4 @@
-from PySide6.QtGui import QCursor, QMouseEvent, QPainter, QPen, QKeyEvent, QColor
+from PySide6.QtGui import QCursor, QMouseEvent, QPainter, QPen, QKeyEvent, QColor, QFont
 from PySide6.QtCore import QPoint, Qt, QEvent, QRectF
 from PySide6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QSizePolicy, QComboBox, QInputDialog
 from pathlib import Path
@@ -38,6 +38,7 @@ class ImageLabellingControls(QWidget):
         self.current_box = [(-1, -1), (-1, -1)]
         self.default_class = "none"
         self.hovered_box_label = None
+        self.showing_all_boxes = False
 
         self.setMouseTracking(True)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
@@ -150,6 +151,17 @@ class ImageLabellingControls(QWidget):
         painter.setPen(pen)
         painter.drawRect(rect)
 
+        # Draw class label
+        class_name = parts[0]
+        font = painter.font()
+        font.setPointSize(8)
+        painter.setFont(font)
+        painter.drawText(int(min(x1, x2)) + 2, int(min(y1, y2)) - 3, class_name)
+
+    def _draw_all_boxes(self):
+        self.showing_all_boxes = not self.showing_all_boxes
+        self.update()
+
     def paintEvent(self, event):
         pixmap = self.parent_label.pixmap()
         if not pixmap or pixmap.isNull():
@@ -187,6 +199,10 @@ class ImageLabellingControls(QWidget):
 
         if self.hovered_box_label is not None:
             self._draw_box_from_label(painter, self.hovered_box_label, QColor('#ffd93d'), 3)
+
+        if self.showing_all_boxes:
+            for box_label in self.boxes_lines:
+                self._draw_box_from_label(painter, box_label, QColor('#00ff00'), 2)
 
     def reset_box(self):
         self.current_box = [(-1, -1), (-1, -1)]
