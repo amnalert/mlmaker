@@ -10,8 +10,9 @@ from login import LoginWindow, NewAccountWindow
 from util import AutoScalingLabel
 from dataloader import UploadImages, UploadLabels
 from imgutil import ImageView
-from audioutil import MusicLoop
+from audioutil import MusicHandler 
 from project_explorer import ProjectExplorer
+from tcp_manager import TCPManager
 
 SAVED_USER_DATA = ""
 INSTALL_LOCATION = Path(__file__).resolve().parent.parent
@@ -67,7 +68,7 @@ class ProjectWindow(QMainWindow):
         self.labels_without_images_label.setFont(self.pt16)
         self.view_missing_images_list = QPushButton("View Unmatched Label Files")
         self.view_missing_images_list.setEnabled(False)
-        self.view_missing_images_list.clicked.connect(lambda: self.view_missing_images(self.labels_without_images))
+        self.view_missing_images_list.clicked.connect(lambda _: self.view_missing_images(self.labels_without_images))
         self.mlayout.addWidget(self.labels_without_images_label, alignment=Qt.AlignmentFlag.AlignBottom)
         self.mlayout.addWidget(self.view_missing_images_list, alignment=Qt.AlignmentFlag.AlignBottom)
 
@@ -93,7 +94,7 @@ class ProjectWindow(QMainWindow):
             self.scroll_layout.setRowStretch(i, 1)
 
         self.scroll_imgs.setWidget(self.scroll_content)
-        self.scroll_imgs.resizeEvent = lambda event: (
+        self.scroll_imgs.resizeEvent = lambda _: (
             self.scroll_content.setMinimumWidth(
                 self.scroll_imgs.viewport().width()
             )
@@ -128,8 +129,8 @@ class ProjectWindow(QMainWindow):
         # Exit project
         self.back_btn = QPushButton("Back")
         self.back_btn.setFixedHeight(40)
-        self.back_btn.clicked.connect(lambda: self.controller.switch_page(4))
-        self.back_btn.clicked.connect(lambda: self.update_image_page)
+        self.back_btn.clicked.connect(lambda _: self.controller.switch_page(4))
+        self.back_btn.clicked.connect(lambda _: self.update_image_page)
         self.page_layout.addWidget(self.back_btn)
 
     def load_saved_images(self, prj):
@@ -329,6 +330,7 @@ class MainController(QMainWindow):
 
         ### INSTANTIATE OBJECTS
 
+
         # Central widget
         central = QWidget()
         self.setCentralWidget(central)
@@ -346,12 +348,12 @@ class MainController(QMainWindow):
         self.music_folder = INSTALL_LOCATION / "assets" / "music"
         self.music_folder.mkdir(parents=True, exist_ok=True)
         self.volume = 0.25
-        self.music = MusicLoop(self.music_folder, self.volume, self)
+        self.music = MusicHandler(self.music_folder, self.volume, self)
         bottom_layout.addWidget(self.music)
 
         # Logout
         self.logout_button = QPushButton("Exit")
-        self.logout_button.clicked.connect(lambda: self.logout())
+        self.logout_button.clicked.connect(lambda _: self.logout())
         bottom_layout.addWidget(self.logout_button, alignment=Qt.AlignmentFlag.AlignRight)
         
         layout.addLayout(bottom_layout)
@@ -363,12 +365,14 @@ class MainController(QMainWindow):
         self.home = ProjectWindow(self)
         self.image_viewer = ImageView(self)
         self.proj_explorer = ProjectExplorer(self)
+        self.tcp_manager = TCPManager(self)
             # Add to stacked widget
         self.sw.addWidget(self.login_page) # 0
         self.sw.addWidget(self.create_account_page) # 1
         self.sw.addWidget(self.home) # 2
         self.sw.addWidget(self.image_viewer) # 3
         self.sw.addWidget(self.proj_explorer) # 4
+        self.sw.addWidget(self.tcp_manager) # 5
 
         self.sw.setCurrentIndex(0)
 
@@ -389,7 +393,7 @@ class MainController(QMainWindow):
         self.load_user_data(data)
         self.home.show_user.setText(f"User: {self.username}")
         self.user_folder = INSTALL_LOCATION / "users" / self.username
-        self.proj_explorer.load_saved_pjs()
+        self.proj_explorer.load_saved_pjs(False)
 
     def load_user_data(self, data: dict):
         SAVED_USER_DATA = INSTALL_LOCATION / "users" / self.username / "user_data.json"

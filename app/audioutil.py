@@ -8,7 +8,7 @@ from pathlib import Path
 SONG_EXTS = {".mp3", ".wav", ".flac", ".m4a"}
 INSTALL_LOCATION = Path(__file__).resolve().parent.parent
 
-class MusicLoop(QWidget):
+class MusicHandler(QWidget):
     def __init__(self, musicdir, volume, controller):
         super().__init__(controller)
 

@@ -8,20 +8,18 @@ from datetime import datetime
 APP_NAME = "ML Maker"
 USERNAME = "default"
 
-class LoginWindow(QMainWindow):
+class LoginWindow(QWidget):
     def __init__(self, controller):
         super().__init__()
         self.controller = controller
 
         # Main window
         self.setFixedSize(QSize(350, 200))
-        layout = QVBoxLayout()
+        layout = QVBoxLayout(self)
         cscreen = QApplication.screenAt(QCursor.pos())
         if not cscreen:
             cscreen = QApplication.primaryScreen()
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        central_widget.setLayout(layout)
+
         self.label = QLabel("Login")
 
         ### INSTANTIATE OBJECTS
@@ -93,20 +91,18 @@ class LoginWindow(QMainWindow):
             )
             return
 
-class NewAccountWindow(QMainWindow):
+class NewAccountWindow(QWidget):
     def __init__(self, controller):
         super().__init__()
         self.controller = controller
 
         # Main window
         self.setFixedSize(QSize(350, 200))
-        layout = QVBoxLayout()
+        layout = QVBoxLayout(self)
         cscreen = QApplication.screenAt(QCursor.pos())
         if not cscreen:
             cscreen = QApplication.primaryScreen()
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        central_widget.setLayout(layout)
+
         self.label = QLabel("Login")
 
         ### INSTANTIATE OBJECTS
