@@ -4,9 +4,10 @@ from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, Q
 from PySide6.QtCore import QSize, Signal, Qt
 from PySide6.QtGui import QCursor
 from datetime import datetime
+from pathlib import Path
 
 APP_NAME = "ML Maker"
-USERNAME = "default"
+INSTALL_LOCATION = Path(__file__).resolve().parent.parent
 
 class LoginWindow(QWidget):
     def __init__(self, controller):
@@ -82,6 +83,13 @@ class LoginWindow(QWidget):
                 "username": username,
                 "access_date": str(datetime.now())
             }
+            # UUID
+            self.user_folder = Path(INSTALL_LOCATION / "users" / self.user_input.text())
+            self.user_folder.mkdir(parents=True, exist_ok=True)
+            uuids_file = (self.user_folder / "project_uuids.json")
+            uuids_file.touch(exist_ok=True)
+
+            # Move data and switch page
             self.controller.receive_user_data(payload)
             self.controller.switch_page(4)
         else:
@@ -155,8 +163,17 @@ class NewAccountWindow(QWidget):
                 "username": self.user_input.text(),
                 "access_date": str(datetime.now())
             }
+
+            # UUID
+            self.user_folder = Path(INSTALL_LOCATION / "users" / self.user_input.text())
+            self.user_folder.mkdir(parents=True, exist_ok=True)
+            uuids_file = (self.user_folder / "project_uuids.json")
+            uuids_file.touch(exist_ok=True)
+
+            # Move data and switch page
             self.controller.receive_user_data(payload)
-            self.controller.switch_page(2)
+            self.controller.switch_page(4)
+
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to save: {str(e)}")
 

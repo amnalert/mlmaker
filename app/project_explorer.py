@@ -1,7 +1,7 @@
 from PySide6.QtWidgets import QSizePolicy, QHBoxLayout, QInputDialog, QGridLayout, QMainWindow, QWidget, QVBoxLayout, QLineEdit, QPushButton, QLabel, QMessageBox, QScrollArea
 from PySide6.QtCore import QSize, Signal, Qt, QTimer
 from PySide6.QtGui import QCursor
-import math
+import math, uuid
 from pathlib import Path
 from functools import partial
 import shutil
@@ -21,6 +21,7 @@ class ProjectExplorer(QMainWindow):
         # Projects
         self.projects = []
         self.prj_folder = Path(INSTALL_LOCATION)
+        self.prj_uuids = {}
         self.network_pjs = False
         self.network_prj_folder = Path(INSTALL_LOCATION)
 
@@ -187,7 +188,7 @@ class ProjectExplorer(QMainWindow):
 
     def open_project(self, prj):
         self.controller.switch_page(2)
-        self.controller.home.load_saved_images(prj)
+        self.controller.home.load_saved_images(prj, self.user_folder)
 
     def move_to_shared(self, prj):
         reply = QMessageBox.question(
@@ -246,17 +247,66 @@ class ProjectExplorer(QMainWindow):
         )
 
     def create_project(self):
+        project_uuid = uuid.uuid4()
+        while project_uuid in self.prj_uuids:
+            project_uuid = uuid.uuid4()
+
+        prj_name = ""
         if self.network_pjs == False:
             prj_name, ok = QInputDialog().getText(self, "Create Project","Project name:", QLineEdit.EchoMode.Normal, "")
+            n = 1
+            if prj_name in [p.stem for p in self.projects]:
+                prj_name = f"{prj_name}_{n}"
+                while prj_name in [p.stem for p in self.projects]:
+                    n += 1
+                    prj_name = f"{prj_name}_{n}"
+
+                reply = QMessageBox.question(
+                    self,
+                    "Duplicate Project Name",
+                    f"Are you sure you want to create '{prj_name}', which is the same name as an existing local project? It will be stored in '{self.username}/projects/{prj_name}_{n}'",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No
+                )
+                if reply == QMessageBox.StandardButton.Yes:
+                    new_prj_folder = Path(self.prj_folder / prj_name)
+                else:
+                    return
+
             if ok and prj_name != '':
                 new_prj_folder = Path(self.prj_folder / prj_name)
                 new_prj_folder.mkdir(parents=True, exist_ok=True)
+            else:
+                return
 
         else:
             prj_name, ok = QInputDialog().getText(self, "Create Shared Project", "Project name:", QLineEdit.EchoMode.Normal, "")
+            n = 1
+            if prj_name in [p.stem for p in self.projects]:
+                prj_name = f"{prj_name}_{n}"
+                while prj_name in [p.stem for p in self.projects]:
+                    n += 1
+                    prj_name = f"{prj_name}_{n}"
+
+                reply = QMessageBox.question(
+                    self,
+                    "Duplicate Project Name",
+                    f"Are you sure you want to create '{prj_name}', which is the same name as an existing network project? It will be stored in '{self.username}/network_projects/{prj_name}_{n}'",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No
+                )
+                if reply == QMessageBox.StandardButton.Yes:
+                    new_prj_folder = Path(self.prj_folder / prj_name)
+                else:
+                    return
+                
             if ok and prj_name != '':
                 new_prj_folder = Path(self.network_prj_folder / prj_name)
                 new_prj_folder.mkdir(parents=True, exist_ok=True)
+            else:
+                return
+
+        self.prj_uuids[prj_name] = project_uuid
         self.load_saved_pjs(self.network_pjs)
 
     def clear_prjs(self):

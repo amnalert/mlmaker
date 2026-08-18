@@ -1,8 +1,8 @@
 from PySide6.QtWidgets import QApplication, QGridLayout, QWidget, QPushButton, QMainWindow, QLabel, QLineEdit, QHBoxLayout, QLabel, QVBoxLayout, QSizePolicy, QInputDialog, QMessageBox, QStackedWidget, QScrollArea
 from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QPixmap, QIcon, QFontMetrics, QCursor, QIntValidator, QFont
-import sys, os
-import json
+import sys
+import json, uuid
 import math
 from pathlib import Path
 
@@ -13,6 +13,7 @@ from imgutil import ImageView
 from audioutil import MusicHandler 
 from project_explorer import ProjectExplorer
 from tcp_manager import TCPManager
+from network_explorer import NetworkExplorer
 
 SAVED_USER_DATA = ""
 INSTALL_LOCATION = Path(__file__).resolve().parent.parent
@@ -34,9 +35,9 @@ class ProjectWindow(QMainWindow):
         self.current_page = 0
 
         # Project
-        self.project = ""
         self.project_classes = []
         self.labels_without_images = []
+        self.project_uuid = ""
 
         ### WINDOW SIZING
 
@@ -133,10 +134,26 @@ class ProjectWindow(QMainWindow):
         self.back_btn.clicked.connect(lambda _: self.update_image_page)
         self.page_layout.addWidget(self.back_btn)
 
-    def load_saved_images(self, prj):
-        self.prj_folder = INSTALL_LOCATION / "users" / self.username / prj
-        #print(f"Loading project images: {self.prj_folder}")
-        self.project = prj
+        # Connect to TCP/UDP
+        self.tcp_manager = TCPManager(self, self.controller)
+
+        self.tcp_connect_button = QPushButton("Send/Receive Data")
+        self.tcp_connect_button.setEnabled(False)
+        self.tcp_connect_button.setFixedHeight(40)
+        self.tcp_connect_button.clicked.connect(lambda _: self.tcp_button)
+        self.page_layout.addWidget(self.tcp_connect_button)
+
+    def tcp_button(self):
+        self.controller.network_page.receive_data(self.username, self.prj_folder)
+        self.controller.switch_page(5)
+
+    def load_saved_images(self, prj, user):
+        self.username = user
+        self.user_folder = Path(INSTALL_LOCATION / "users" / self.username )
+        self.prj_folder = Path(self.user_folder / prj)
+        self.uuid = 
+
+        # Show images
         if self.prj_folder.exists() and self.prj_folder.is_dir():
             img_uploads = self.prj_folder / "image_uploads"
             img_uploads.mkdir(parents=True, exist_ok=True)
@@ -283,8 +300,8 @@ class ProjectWindow(QMainWindow):
             self.edit_class_list()
 
     def check_uploaded_labels(self):
-        image_uploads = Path(self.project) / "image_uploads"
-        image_labels = Path(self.project) / "image_labels"
+        image_uploads = Path(self.prj_folder) / "image_uploads"
+        image_labels = Path(self.prj_folder) / "image_labels"
         self.labels_without_images = []
         for label in image_labels.iterdir():
             label_has_corresponding_image = False
@@ -365,14 +382,14 @@ class MainController(QMainWindow):
         self.home = ProjectWindow(self)
         self.image_viewer = ImageView(self)
         self.proj_explorer = ProjectExplorer(self)
-        self.tcp_manager = TCPManager(self)
+        self.network_page = NetworkExplorer(self)
             # Add to stacked widget
-        self.sw.addWidget(self.login_page) # 0
-        self.sw.addWidget(self.create_account_page) # 1
-        self.sw.addWidget(self.home) # 2
-        self.sw.addWidget(self.image_viewer) # 3
-        self.sw.addWidget(self.proj_explorer) # 4
-        self.sw.addWidget(self.tcp_manager) # 5
+        self.sw.addWidget(self.login_page)          # self.controller.switch_page(0)
+        self.sw.addWidget(self.create_account_page) # self.controller.switch_page(1)
+        self.sw.addWidget(self.home)                # self.controller.switch_page(2)
+        self.sw.addWidget(self.image_viewer)        # self.controller.switch_page(3)
+        self.sw.addWidget(self.proj_explorer)       # self.controller.switch_page(4)
+        self.sw.addWidget(self.network_page)        # self.controller.switch_page(5)
 
         self.sw.setCurrentIndex(0)
 
