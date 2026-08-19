@@ -29,6 +29,37 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv"}
 LABEL_EXTENSIONS = {".csv", ".tsv", ".xml", ".txt", ".parquet", ".json", ".yml", ".yaml", ".tar"}
 
+
+def extract_zip_contents(zip_path, image_location, downloads_location):
+    image_location.mkdir(parents=True, exist_ok=True)
+    downloads_location.mkdir(parents=True, exist_ok=True)
+    extracted_images = []
+
+    with zipfile.ZipFile(zip_path, "r") as archive:
+        for member in archive.infolist():
+            if member.is_dir():
+                continue
+
+            member_path = Path(member.filename)
+            if member_path.is_absolute() or ".." in member_path.parts:
+                continue
+
+            if member_path.suffix.lower() in IMAGE_EXTENSIONS:
+                destination = image_location / member_path.name
+                counter = 1
+                while destination.exists():
+                    destination = image_location / f"{member_path.stem}_{counter}{member_path.suffix}"
+                    counter += 1
+                extracted_images.append(destination)
+            else:
+                destination = downloads_location / member_path
+                destination.parent.mkdir(parents=True, exist_ok=True)
+
+            with archive.open(member) as source, open(destination, "wb") as target:
+                shutil.copyfileobj(source, target)
+
+    return extracted_images
+
 class UploadImages(QPushButton):
     def __init__(self, parents, controller):
         super().__init__("Upload Unlabelled Images/Videos")
@@ -48,6 +79,7 @@ class UploadImages(QPushButton):
     def open_dialog(self):
         self.project = self.parent_widget.current_project
         files = ImageLoader().load_files(self)
+
         save_location = self.project / "image_uploads"
         save_location.mkdir(parents=True, exist_ok=True)
         if files:

@@ -19,8 +19,13 @@ class TCPManager(QWidget):
         self.buffers = {}
         self.img_transfers = {}
 
+        # Download
         self.download_folder = Path(INSTALL_LOCATION)
+        self.download_folder.mkdir(parents=True, exist_ok=True)
 
+    def show_page(self, prj):
+        self.download_folder = Path( prj / "downloads")
+        self.download_folder.mkdir(parents=True, exist_ok=True)
 
     def start_server(self):
         # Download

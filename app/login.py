@@ -78,7 +78,6 @@ class LoginWindow(QWidget):
             is_valid = True
 
         if is_valid:
-            self.controller.showMaximized()
             payload = {
                 "username": username,
                 "access_date": str(datetime.now())
@@ -167,7 +166,7 @@ class NewAccountWindow(QWidget):
             # UUID
             self.user_folder = Path(INSTALL_LOCATION / "users" / self.user_input.text())
             self.user_folder.mkdir(parents=True, exist_ok=True)
-            uuids_file = (self.user_folder / "project_uuids.json")
+            uuids_file = (self.user_folder / "project_data.json")
             uuids_file.touch(exist_ok=True)
 
             # Move data and switch page

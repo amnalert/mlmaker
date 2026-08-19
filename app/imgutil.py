@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import QWidget, QGridLayout, QPushButton, QComboBox, QFrame, QMainWindow, QLabel, QLineEdit, QHBoxLayout, QLabel, QVBoxLayout, QSizePolicy, QInputDialog, QMessageBox, QStackedWidget, QScrollArea
 from PySide6.QtCore import QSize, Qt, QTimer, QPoint
-from PySide6.QtGui import QPainter, QPixmap, QIcon
+from PySide6.QtGui import QPainter, QPixmap, QIcon, QFont
 import sys, os
 import json
 import math
@@ -14,11 +14,18 @@ class ImageView(QWidget):
         self.controller = controller
 
         self.project = ""
+        self.images = []
         self.species = []
         self.image_label_file = ""
         self.default_class = "none"
 
         main_layout = QHBoxLayout(self)
+
+        # Fonts
+        self.pt16 = QFont()
+        self.pt8 = QFont()
+        self.pt16.setPointSize(16)
+        self.pt8.setPointSize(8)
 
         ### Image stuff
 
@@ -32,6 +39,11 @@ class ImageView(QWidget):
         self.back_button.setFixedWidth(120)
         self.back_button.clicked.connect(lambda: self.controller.switch_page(2))
         self.back_button.clicked.connect(lambda: self.controller.home.update_image_page)
+
+        # Image index
+        self.img_index = 0
+        self.img_index_lbl = QLabel("Image: 0/0")
+        self.img_index_lbl.setFont(self.pt8)
 
         # Image
         self.image_label = QLabel()
@@ -52,6 +64,7 @@ class ImageView(QWidget):
 
         imglayout.addWidget(self.image_scroll_area, stretch=1)
         imglayout.addWidget(self.back_button)
+        imglayout.addWidget(self.img_index_lbl)
 
         ### Right-side UI
 
@@ -107,7 +120,9 @@ class ImageView(QWidget):
         if ok and choice:
             self.default_class = choice
 
-    def view_image(self, img, prj):
+    def view_image(self, img, prj, img_list):
+        self.images = img_list
+        self.img_index = img_list.index(img)
         self.image_name.setText(f"{img.parent.name}/{img.name}")
         self.orig_pixmap = QPixmap(str(img))
         self.project = self.controller.home.current_project
@@ -115,7 +130,7 @@ class ImageView(QWidget):
         self.image_label_file = Path(prj / "image_labels" / f"{img.stem}.txt")
         self.image_label_file.parent.mkdir(parents=True, exist_ok=True)
         self.image_label_file.touch()
-
+        self.img_index_lbl.setText(f"Image: {self.img_index + 1}/{len(self.images)}")
         self.image_label.setPixmap(self.orig_pixmap)
         self.update_image()
         self.img_labelling_controls.load_saved_boxes(self.image_label_file)
@@ -142,3 +157,11 @@ class ImageView(QWidget):
 
         if hasattr(self, "orig_pixmap"):
             self.update_image()
+
+class FirstPass(QWidget):
+    def __init__(self, parents, controller):
+        super().__init__()
+        self.parents = parents
+        self.controller = controller
+
+        self.setWindowTitle("First Pass")

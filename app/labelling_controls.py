@@ -49,9 +49,20 @@ class ImageLabellingControls(QWidget):
         self.resize(self.parent_label.size())
 
     def keyPressEvent(self, event: QKeyEvent):
-        if event.key() == Qt.Key.Key_Escape and self.current_box[0] != (-1, -1):
+        if event.key() == Qt.Key.Key_Escape:
             self.reset_box()
             self.update()
+        elif event.key() == Qt.Key.Key_Right:
+            self.reset_box()
+            try:
+                self.parents.controller.home.inspect_img(self.parents.images[self.parents.img_index + 1])
+            except IndexError:
+                pass
+        elif event.key() == Qt.Key.Key_Left:
+            self.reset_box()
+            if self.parents.img_index >= 1:
+                self.parents.controller.home.inspect_img(self.parents.images[self.parents.img_index - 1])
+
 
     def mouseMoveEvent(self, event):
         self.mouse_pos = event.position().toPoint()
@@ -205,9 +216,10 @@ class ImageLabellingControls(QWidget):
                 self._draw_box_from_label(painter, box_label, QColor('#00ff00'), 2)
 
     def reset_box(self):
-        self.current_box = [(-1, -1), (-1, -1)]
-        self.parents.box_label_1.setText(f"Point 1: (0, 0)")
-        self.parents.box_label_2.setText(f"Point 2: (0, 0)")
+        if self.current_box[0] != (-1, -1):
+            self.current_box = [(-1, -1), (-1, -1)]
+            self.parents.box_label_1.setText(f"Point 1: (0, 0)")
+            self.parents.box_label_2.setText(f"Point 2: (0, 0)")
 
     def write_box_data(self, box, boxclass):
         if box[0] != (-1, -1) and box[1] != (-1, -1):

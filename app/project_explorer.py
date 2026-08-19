@@ -1,7 +1,7 @@
-from PySide6.QtWidgets import QSizePolicy, QHBoxLayout, QInputDialog, QGridLayout, QMainWindow, QWidget, QVBoxLayout, QLineEdit, QPushButton, QLabel, QMessageBox, QScrollArea
+from PySide6.QtWidgets import QApplication, QSizePolicy, QHBoxLayout, QInputDialog, QGridLayout, QMainWindow, QWidget, QVBoxLayout, QLineEdit, QPushButton, QLabel, QMessageBox, QScrollArea
 from PySide6.QtCore import QSize, Signal, Qt, QTimer
 from PySide6.QtGui import QCursor
-import math, uuid
+import math, uuid, json
 from pathlib import Path
 from functools import partial
 import shutil
@@ -16,14 +16,20 @@ class ProjectExplorer(QMainWindow):
         ### INITIALIZE VARIABLES
 
         # User info
-        self.username = self.controller.username
+        self.username = ""
+        self.user_folder = Path(INSTALL_LOCATION)
 
         # Projects
         self.projects = []
         self.prj_folder = Path(INSTALL_LOCATION)
+        self.prj_names = {}
         self.prj_uuids = {}
-        self.network_pjs = False
         self.network_prj_folder = Path(INSTALL_LOCATION)
+
+        self.current_user_location = "local"
+
+        self.local_prjs = []
+        self.network_prjs = []
 
         # Images
         self.pjs_per_page = 20
@@ -73,12 +79,6 @@ class ProjectExplorer(QMainWindow):
         self.mlayout.addWidget(self.scroll_pjs)
         
         self.scroll_pjs.setWidget(self.scroll_content)
-        self.scroll_pjs.setMinimumWidth(self.scroll_pjs.viewport().width())
-        self.scroll_pjs.resizeEvent = lambda _: (
-            self.scroll_pjs.setMinimumWidth(
-                self.scroll_pjs.viewport().width()
-            )
-        )
 
         # Footer layout
             # Create new project button
@@ -96,41 +96,186 @@ class ProjectExplorer(QMainWindow):
         self.switch_prj_type_btn_lbl.setWordWrap(True)
         self.switch_prj_type = QPushButton(self.switch_prj_type_btn_lbl)
         self.switch_prj_type.setFixedSize(200, 50)
-        self.switch_prj_type.clicked.connect(lambda _: self.load_saved_pjs(not self.network_pjs))
+        self.switch_prj_type.clicked.connect(lambda _: self.load_saved_pjs("local" if self.current_user_location == "shared" else "shared"))
         self.footer_layout.addWidget(self.switch_prj_type)
         self.mlayout.addLayout(self.footer_layout)
 
-    def load_saved_pjs(self, network_bool):
-        self.scroll_pjs.setMinimumWidth(self.scroll_pjs.viewport().width())
-
+    def load_saved_pjs(self, ptype):
         self.user_folder = self.controller.user_folder
-        self.prj_folder = self.user_folder / "projects"
-        self.network_prj_folder = self.user_folder / "shared_projects"
+
+        self.load_and_update_json()
+
         if self.user_folder.exists() and self.user_folder.is_dir():
-            if network_bool == False:
+            prjs = []
+            # Local prjs
+            if ptype == "local":
                 self.setWindowTitle("Project Explorer - Local Projects")
                 self.switch_prj_type.setText("Switch to Shared/Network Projects")
                 self.create_prj_btn.setText("Create Local Project")
 
-                self.network_pjs = False
-                self.prj_folder.mkdir(parents=True, exist_ok=True)
-                prjs = [
-                    Path(p) for p in self.prj_folder.iterdir()
-                    if p.is_dir()
-                ]
-                self.show_prjs(prjs)
+                self.current_user_location = "local"
+                prjs = self.local_prjs
+
+            # Network prjs
             else:
                 self.setWindowTitle("Project Explorer - Shared/Network Projects")
                 self.switch_prj_type.setText("Switch to Local Projects")
                 self.create_prj_btn.setText("Create Shared/Network Project")
-                
-                self.network_pjs = True
-                self.network_prj_folder.mkdir(parents=True, exist_ok=True)
-                prjs = [
-                    Path(p) for p in self.network_prj_folder.iterdir()
-                    if p.is_dir()
-                ]
-                self.show_prjs(prjs)
+
+                self.current_user_location = "shared"
+                prjs = self.network_prjs
+
+            self.show_prjs(prjs)
+
+    def load_and_update_json(self):
+
+        # Load saved project data
+        data = []
+        prj_dataf = Path(self.user_folder / f"{self.username}_projectdata.json")
+        prj_dataf.touch(exist_ok=True)
+        if prj_dataf.exists() and prj_dataf.stat().st_size > 0:
+            with open(prj_dataf, "r") as f:
+                data = json.load(f)
+
+        # convert to set(name -> project data, uuid -> project data)
+        self.prj_names = {entry["name"]: entry for entry in data if "name" in entry}
+        self.prj_uuids = {entry["uuid"]: entry for entry in data if "uuid" in entry}
+
+        # project folders
+        self.prj_folder = self.user_folder / "projects"
+        self.prj_folder.mkdir(parents=True, exist_ok=True)
+        self.network_prj_folder = self.user_folder / "shared_projects"
+        self.network_prj_folder.mkdir(parents=True, exist_ok=True)
+
+        self.local_prjs = [
+            p for p in self.prj_folder.iterdir() if p.is_dir()
+        ]
+        self.network_prjs = [
+            p for p in self.network_prj_folder.iterdir() if p.is_dir()
+        ]
+        self.projects = self.local_prjs + self.network_prjs
+
+        # UUID Checking, name and then uuid
+        for prj in self.projects:
+            prj_uuidfile = Path(prj / "uuid.txt")
+            prj_uuidfile.touch(exist_ok=True)
+
+            pname = prj.stem
+            project_uuid = ""
+            with open(prj_uuidfile, "r") as f:
+                project_uuid = f.read().strip()
+            prj_type = "CV"
+            prj_shared = "local"
+            if prj.parent == self.network_prj_folder:
+                prj_shared = "network"
+
+            if pname in self.prj_names:
+                # Project name exists in JSON, check UUIDs
+                existing_prj = self.prj_names[pname]
+                existing_prj_uuid = existing_prj["uuid"]
+
+                if project_uuid == "":
+                    # project not given a UUID file yet
+                    project_uuid = existing_prj_uuid
+                    with open(prj_uuidfile, "w") as f:
+                        f.write(project_uuid)
+                    continue
+
+                elif existing_prj_uuid == project_uuid:
+                    # name and UUID match
+                    continue
+
+                else:
+                    # Project names are the same but the UUIDs aren't. shouldn't happen unless a project was name changed manually
+                    if project_uuid in self.prj_uuids:
+                        # Project uuid exists, belongs to another project
+                        QMessageBox.warning(
+                            self,
+                            "Project Mismatch",
+                            "A project on the JSON has the same name as a saved project but a mismatched UUID. This project was removed from the JSON(no actual project data was deleted)."
+                        )
+                        data.remove(existing_prj)
+
+                        self.prj_names.pop(pname, None)
+
+                        if self.prj_uuids.get(existing_prj_uuid) is existing_prj:
+                            self.prj_uuids.pop(existing_prj_uuid, None)
+
+                        project_data = {
+                            "name": pname,
+                            "uuid": project_uuid,
+                            "type": prj_type,
+                            "shared": prj_shared
+                        }
+                        data.append(project_data)
+                        self.prj_names[pname] = project_data
+                        self.prj_uuids[project_uuid] = project_data
+
+                    else:
+                        # this should never run because it would mean the existing UUID from the JSON is not in the existing UUIDs from the JSON...
+                        # manual JSON tampering while program running?
+                        print("This block of code should not run unless the JSON is messed with manually while the program is running. Please contact me on GitHub if you see this message and were not tampering with the JSON.")
+                        print("The application will now close.")
+                        QApplication.quit()
+                        return
+
+            else:
+                # project name doesnt exist in JSON
+
+                # No project UUID file
+                if project_uuid == "": 
+                    project_uuid = str(uuid.uuid4())
+                    while project_uuid in self.prj_uuids:
+                        project_uuid = str(uuid.uuid4())
+                    with open(prj_uuidfile, "w") as f:
+                        f.write(project_uuid)
+
+                if project_uuid in self.prj_uuids:
+                    existing_prj = self.prj_uuids[project_uuid]
+                    old_name = existing_prj["name"]
+                    old_folder_exists = any(
+                        existing_folder.stem == old_name
+                        for existing_folder in self.projects
+                    )
+
+                    if old_folder_exists:
+                        project_uuid = str(uuid.uuid4())
+                        while project_uuid in self.prj_uuids:
+                            project_uuid = str(uuid.uuid4())
+                        with open(prj_uuidfile, "w") as f:
+                            f.write(project_uuid)
+
+                        project_data = {
+                            "name": pname,
+                            "uuid": project_uuid,
+                            "type": prj_type,
+                            "shared": prj_shared
+                        }
+                        data.append(project_data)
+                        self.prj_names[pname] = project_data
+                        self.prj_uuids[project_uuid] = project_data
+                    else:
+                        existing_prj["name"] = pname
+                        existing_prj["type"] = prj_type
+                        existing_prj["shared"] = prj_shared
+
+                        self.prj_names.pop(old_name, None)
+                        self.prj_names[pname] = existing_prj
+                else:
+                    # project in files but not in JSON
+                    project_data = {
+                        "name": pname,
+                        "uuid": project_uuid,
+                        "type": prj_type,
+                        "shared": prj_shared
+                    }
+                    data.append(project_data)
+                    self.prj_names[pname] = project_data
+                    self.prj_uuids[project_uuid] = project_data
+
+        # Rewrite JSON
+        with open(prj_dataf, "w") as f:
+            json.dump(data, f, indent=4)
 
     def show_prjs(self, prj_list):
         self.projects = prj_list
@@ -175,7 +320,7 @@ class ProjectExplorer(QMainWindow):
             move_prj_btn = QPushButton("Copy to Shared/Network Projects")
             move_prj_btn.setMaximumHeight(30)
             move_prj_btn.adjustSize()
-            move_prj_btn.clicked.connect(partial(self.move_to_shared, prj))
+            move_prj_btn.clicked.connect(partial(self.move_to_shared, prj, self.current_user_location))
 
             # Set the button itself to be 75% the width of the prj_container widget
             prj_container_layout.addWidget(prj_btn, 3)
@@ -187,19 +332,67 @@ class ProjectExplorer(QMainWindow):
         self.update_pagination_controls()
 
     def open_project(self, prj):
-        self.controller.switch_page(2)
-        self.controller.home.load_saved_images(prj, self.user_folder)
+        project_data = self.prj_names.get(prj.name)
+        if project_data is None:
+            self.load_and_update_json()
+            project_data = self.prj_names.get(prj.name)
 
-    def move_to_shared(self, prj):
+        if project_data is None:
+            QMessageBox.warning(
+                self,
+                "Project Metadata Missing",
+                f"Project metadata for '{prj.name}' could not be found."
+            )
+            return
+
+        self.controller.switch_page(2)
+        self.controller.home.load_saved_images(
+            prj, self.user_folder, project_data["uuid"]
+        )
+
+    def move_to_shared(self, prj, ptype):
+        copytotype = ("local" if ptype == "shared" else "shared") # what have i done to myself
         reply = QMessageBox.question(
             self,
             "Copy to Shared",
-            f"Are you sure you want to copy '{prj.name}' to shared/network projects?",
+            f"Are you sure you want to copy '{prj.name}' to {copytotype} projects?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )
+        copied = False
         if reply == QMessageBox.StandardButton.Yes:
-            shutil.copytree(prj, self.network_prj_folder / Path(prj).name)
+            n = 1
+            #prj_name = prj.stem.split('_')[-1]
+            prj_name = prj.name.rstrip('_').split('_')[-1] # who would end a directory name with an underscore? maybe even two? someone would...
+            while prj_name in [p.stem for p in self.projects]:
+                n += 1
+                prj_name = f"{prj_name}_{n}"
+            copy_allowed = True
+            if n > 1:
+                reply = QMessageBox.question(
+                    self,
+                    "Duplicate Project Name",
+                    f"Are you sure you want to copy '{prj.stem}', which is the same name as an existing {ptype} project? It will be stored in '{self.username}/{"projects" if copytotype == "local" else "shared_projects"}/{prj_name}'",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No
+                )
+                copy_allowed = reply == QMessageBox.StandardButton.Yes
+            if copy_allowed:
+                folder = Path(INSTALL_LOCATION)
+                if copytotype == "shared": # backwards logic sob
+                    folder = self.network_prj_folder
+                else:
+                    folder = self.prj_folder
+                shutil.copytree(prj, folder / Path(prj_name).name, dirs_exist_ok=True)
+                copied = True
+                copied_uuid = str(uuid.uuid4())
+                copied_uuidfile = folder / prj_name / "uuid.txt"
+                with open(copied_uuidfile, "w") as f:
+                    f.write(copied_uuid)
+                # print(f"Copied {prj} to {folder / Path(prj_name).name}")
+        if copied:
+            self.load_and_update_json()
+            self.load_saved_pjs(ptype)
 
     def delete_project(self, prj):
         reply = QMessageBox.question(
@@ -211,12 +404,12 @@ class ProjectExplorer(QMainWindow):
         )
         if reply == QMessageBox.StandardButton.Yes:
             shutil.rmtree(prj)
-            self.load_saved_pjs(self.network_pjs)
+            self.load_saved_pjs(self.current_user_location)
 
     def previous_page(self):
         if self.current_page > 0:
             self.current_page -= 1
-            self.load_saved_pjs(self.network_pjs)
+            self.load_saved_pjs(self.current_user_location)
 
     def next_page(self):
         total_pages = math.ceil(
@@ -225,7 +418,7 @@ class ProjectExplorer(QMainWindow):
 
         if self.current_page < total_pages - 1:
             self.current_page += 1
-            self.load_saved_pjs(self.network_pjs)
+            self.load_saved_pjs(self.current_user_location)
 
     def update_pagination_controls(self):
         total_pages = math.ceil(
@@ -247,13 +440,29 @@ class ProjectExplorer(QMainWindow):
         )
 
     def create_project(self):
-        project_uuid = uuid.uuid4()
-        while project_uuid in self.prj_uuids:
-            project_uuid = uuid.uuid4()
+        # Check saved project data again
+        prj_dataf = Path(self.user_folder / f"{self.username}_projectdata.json")
+        prj_dataf.touch(exist_ok=True)
+        with open(prj_dataf, "r") as f:
+            data = json.load(f)
 
+        self.prj_names = {entry["name"]: entry for entry in data if "name" in entry}
+        self.prj_uuids = {entry["uuid"]: entry for entry in data if "uuid" in entry}
+
+        # New UUID
+        project_uuid = str(uuid.uuid4())
+        while project_uuid in self.prj_uuids:
+            project_uuid = str(uuid.uuid4())
+
+        # info for project data JSON
         prj_name = ""
-        if self.network_pjs == False:
-            prj_name, ok = QInputDialog().getText(self, "Create Project","Project name:", QLineEdit.EchoMode.Normal, "")
+        prj_type = "CV" # only does cv right now, hoping to extend to language soon
+        prj_share = False
+
+        new_prj_folder = Path(INSTALL_LOCATION)
+        # local prj
+        if self.current_user_location == "local":
+            prj_name, ok = QInputDialog().getText(self, "Create Project", "Project name:", QLineEdit.EchoMode.Normal, "")
             n = 1
             if prj_name in [p.stem for p in self.projects]:
                 prj_name = f"{prj_name}_{n}"
@@ -278,8 +487,9 @@ class ProjectExplorer(QMainWindow):
                 new_prj_folder.mkdir(parents=True, exist_ok=True)
             else:
                 return
-
+        # shared prj
         else:
+            prj_share = True
             prj_name, ok = QInputDialog().getText(self, "Create Shared Project", "Project name:", QLineEdit.EchoMode.Normal, "")
             n = 1
             if prj_name in [p.stem for p in self.projects]:
@@ -291,7 +501,7 @@ class ProjectExplorer(QMainWindow):
                 reply = QMessageBox.question(
                     self,
                     "Duplicate Project Name",
-                    f"Are you sure you want to create '{prj_name}', which is the same name as an existing network project? It will be stored in '{self.username}/network_projects/{prj_name}_{n}'",
+                    f"Are you sure you want to create '{prj_name}', which is the same name as an existing network project? It will be stored in '{self.username}/shared_projects/{prj_name}_{n}'",
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                     QMessageBox.StandardButton.No
                 )
@@ -306,9 +516,19 @@ class ProjectExplorer(QMainWindow):
             else:
                 return
 
-        self.prj_uuids[prj_name] = project_uuid
-        self.load_saved_pjs(self.network_pjs)
+        # UUID storage
+        data.append( {"name": prj_name, "uuid": project_uuid, "type": prj_type, "shared": prj_share} )
+        with open(prj_dataf, "w") as f:
+            json.dump(data, f, indent=4)
 
+        prj_uuidfile = Path(new_prj_folder / "uuid.txt")
+        prj_uuidfile.touch(exist_ok=True)
+        with open(prj_uuidfile, "w") as f:
+            f.write(project_uuid)
+
+        self.load_and_update_json()
+        self.load_saved_pjs(self.current_user_location)
+        
     def clear_prjs(self):
         while self.scroll_layout.count():
             item = self.scroll_layout.takeAt(0)
@@ -320,6 +540,3 @@ class ProjectExplorer(QMainWindow):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-
-        if len(self.projects) > 0:
-            self.load_saved_pjs(self.network_pjs)

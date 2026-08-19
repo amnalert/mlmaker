@@ -9,7 +9,7 @@ from pathlib import Path
 from login import LoginWindow, NewAccountWindow
 from util import AutoScalingLabel
 from dataloader import UploadImages, UploadLabels
-from imgutil import ImageView
+from imgutil import ImageView, FirstPass
 from audioutil import MusicHandler 
 from project_explorer import ProjectExplorer
 from tcp_manager import TCPManager
@@ -37,13 +37,19 @@ class ProjectWindow(QMainWindow):
         # Project
         self.project_classes = []
         self.labels_without_images = []
-        self.project_uuid = ""
+        self.current_project = ""
+        self.uuid = ""
+
+        # Fonts
+        self.pt16 = QFont()
+        self.pt8 = QFont()
+        self.pt16.setPointSize(16)
+        self.pt8.setPointSize(8)
         self.current_project = ""
 
         ### WINDOW SIZING
 
         # Main window
-        self.setMinimumSize(QSize(600, 450))
         current_screen = QApplication.screenAt(QCursor.pos())
         if not current_screen:
             current_screen = QApplication.primaryScreen()
@@ -55,8 +61,11 @@ class ProjectWindow(QMainWindow):
         ### INSTANTIATE OBJECTS
         self.show_user = QLabel("")
         self.show_project = QLabel("")
+        self.show_uuid = QLabel("")
+        self.show_uuid.setFont(self.pt8)
         self.mlayout.addWidget(self.show_user, alignment=Qt.AlignmentFlag.AlignTop) 
         self.mlayout.addWidget(self.show_project, alignment=Qt.AlignmentFlag.AlignTop) 
+        self.mlayout.addWidget(self.show_uuid, alignment=Qt.AlignmentFlag.AlignTop)
 
         self.upload_imgs = UploadImages(self, self.controller)
         self.mlayout.addWidget(self.upload_imgs, alignment=Qt.AlignmentFlag.AlignBottom)
@@ -96,11 +105,6 @@ class ProjectWindow(QMainWindow):
             self.scroll_layout.setRowStretch(i, 1)
 
         self.scroll_imgs.setWidget(self.scroll_content)
-        self.scroll_imgs.resizeEvent = lambda _: (
-            self.scroll_content.setMinimumWidth(
-                self.scroll_imgs.viewport().width()
-            )
-        )
 
         # Page layout 
         self.page_layout = QHBoxLayout()
@@ -148,10 +152,12 @@ class ProjectWindow(QMainWindow):
         self.controller.network_page.receive_data(self.username, self.prj_folder)
         self.controller.switch_page(5)
 
-    def load_saved_images(self, prj, user):
-        self.username = user
-        self.user_folder = Path(INSTALL_LOCATION / "users" / self.username )
+    def load_saved_images(self, prj, user_folder, prj_uuid):
+        self.user_folder = user_folder
+        self.user_folder = Path(INSTALL_LOCATION / "users" / self.user_folder.stem )
         self.prj_folder = Path(self.user_folder / prj)
+        self.current_project = prj
+        self.uuid = prj_uuid
         self.current_project = prj
 
         # Show images
@@ -168,6 +174,7 @@ class ProjectWindow(QMainWindow):
             cls_list.touch()
             with open(cls_list, "r") as f:
                 self.project_classes = f.read().strip().split(',')
+
         self.show_project.setText(f"Project: {prj.name}")
         self.check_uploaded_labels()
 
@@ -255,9 +262,10 @@ class ProjectWindow(QMainWindow):
             pass
 
     def inspect_img(self, image):
+        image_list = self.images
         if image:
             self.controller.switch_page(3)
-            self.controller.image_viewer.view_image(image, self.prj_folder)
+            self.controller.image_viewer.view_image(image, self.prj_folder, image_list)
 
     def previous_page(self):
         if self.current_page > 0:
@@ -304,6 +312,8 @@ class ProjectWindow(QMainWindow):
     def check_uploaded_labels(self):
         image_uploads = Path(self.prj_folder) / "image_uploads"
         image_labels = Path(self.prj_folder) / "image_labels"
+        image_uploads.mkdir(parents=True, exist_ok=True)
+        image_labels.mkdir(parents=True, exist_ok=True)
         self.labels_without_images = []
         for label in image_labels.iterdir():
             label_has_corresponding_image = False
@@ -429,7 +439,7 @@ class MainController(QMainWindow):
         self.load_user_data(data)
         self.home.show_user.setText(f"User: {self.username}")
         self.user_folder = INSTALL_LOCATION / "users" / self.username
-        self.proj_explorer.load_saved_pjs(False)
+        self.proj_explorer.load_saved_pjs("local")
 
     def load_user_data(self, data: dict):
         SAVED_USER_DATA = INSTALL_LOCATION / "users" / self.username / "user_data.json"
