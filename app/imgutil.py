@@ -108,9 +108,9 @@ class ImageView(QWidget):
             self.default_class = choice
 
     def view_image(self, img, prj):
-        self.image_name.setText(f"{img.name}")
+        self.image_name.setText(f"{img.parent.name}/{img.name}")
         self.orig_pixmap = QPixmap(str(img))
-        self.project = self.controller.home.project
+        self.project = self.controller.home.current_project
         self.species = self.controller.home.project_classes
         self.image_label_file = Path(prj / "image_labels" / f"{img.stem}.txt")
         self.image_label_file.parent.mkdir(parents=True, exist_ok=True)

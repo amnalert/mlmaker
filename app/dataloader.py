@@ -1,26 +1,54 @@
 from PySide6.QtWidgets import QPushButton, QFileDialog, QMessageBox
-import sys, os, zipfile
+from PySide6.QtCore import QTimer, QThread, QObject, Signal
+import zipfile
 from pathlib import Path
 import shutil
 
+from video_converter import VideoConverter
+
+
+class VideoConvertWorker(QObject):
+    finished = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, video_path, project_path, output_name=None):
+        super().__init__()
+        self.video_path = video_path
+        self.project_path = project_path
+        self.output_name = output_name
+
+    def run(self):
+        try:
+            converter = VideoConverter()
+            converted_frames = converter.convert_mp4(self.video_path, self.project_path, self.output_name)
+            self.finished.emit(converted_frames)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
+VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv"}
 LABEL_EXTENSIONS = {".csv", ".tsv", ".xml", ".txt", ".parquet", ".json", ".yml", ".yaml", ".tar"}
 
 class UploadImages(QPushButton):
     def __init__(self, parents, controller):
-        super().__init__("Upload Unlabelled Images")
+        super().__init__("Upload Unlabelled Images/Videos")
         self.controller = controller
         self.parent_widget = parents
 
         self.project = ""
+        self._video_queue = []
+        self._video_processing = False
+        self._default_text = "Upload Unlabelled Images/Videos"
+        self._video_thread = None
+        self._video_worker = None
 
         self.clicked.connect(self.open_dialog)
         self.images = []
 
     def open_dialog(self):
-        self.project = self.parent_widget.project
+        self.project = self.parent_widget.current_project
         files = ImageLoader().load_files(self)
-        save_location = Path(self.controller.user_folder) / self.parent_widget.project / "image_uploads"
+        save_location = self.project / "image_uploads"
         save_location.mkdir(parents=True, exist_ok=True)
         if files:
             for file in files:
@@ -53,8 +81,102 @@ class UploadImages(QPushButton):
                 elif path.suffix.lower() in IMAGE_EXTENSIONS:
                     self.images.append(dest)
                     shutil.copy2(path, dest)
+                elif path.suffix.lower() in VIDEO_EXTENSIONS:
+                    resolved_video = self._resolve_video_name(path)
+                    if resolved_video is not None:
+                        self._video_queue.append((path, Path(self.project), resolved_video))
+
+            if self._video_queue:
+                self._process_next_video()
+                return
+
         self.images = []
-        self.parent_widget.load_saved_images(self.project)
+        self.parent_widget.load_saved_images(self.project, self.parent_widget.username)
+
+    def _resolve_video_name(self, video_path):
+        converted_dir = Path(self.project) / "converted_videos"
+        converted_dir.mkdir(parents=True, exist_ok=True)
+
+        base_name = video_path.stem
+        candidate = converted_dir / base_name
+        if not candidate.exists():
+            return base_name
+
+        index = 1
+        while True:
+            candidate = converted_dir / f"{base_name}_{index}"
+            if not candidate.exists():
+                break
+            index += 1
+
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Duplicate converted video folder")
+        msg.setText(f"A converted video folder named '{base_name}' already exists.")
+        msg.setInformativeText(f"Use '{base_name}_{index}' instead?")
+        msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
+        msg.setDefaultButton(QMessageBox.StandardButton.Yes)
+
+        result = msg.exec()
+        if result == QMessageBox.StandardButton.Yes:
+            return f"{base_name}_{index}"
+        return None
+
+    def _process_next_video(self):
+        if self._video_processing or not self._video_queue:
+            if not self._video_processing and not self._video_queue:
+                self.images = []
+                self.setText(self._default_text)
+                self.setEnabled(True)
+                print("Finished converting all videos.")
+                QTimer.singleShot(0, lambda: self.parent_widget.load_saved_images(self.project, self.parent_widget.username))
+            return
+
+        self._video_processing = True
+        self.setEnabled(False)
+        self.setText("Processing video...")
+
+        video_path, project_path, output_name = self._video_queue.pop(0)
+        self._video_thread = QThread(self)
+        self._video_worker = VideoConvertWorker(video_path, project_path, output_name)
+        self._video_worker.moveToThread(self._video_thread)
+
+        self._video_thread.started.connect(self._video_worker.run)
+        self._video_worker.finished.connect(self._handle_video_result)
+        self._video_worker.failed.connect(self._handle_video_error)
+        self._video_worker.finished.connect(self._video_thread.quit)
+        self._video_worker.failed.connect(self._video_thread.quit)
+        self._video_worker.finished.connect(self._video_worker.deleteLater)
+        self._video_worker.failed.connect(self._video_worker.deleteLater)
+        self._video_thread.finished.connect(self._video_thread.deleteLater)
+
+        self._video_thread.start()
+
+    def _handle_video_result(self, converted_frames):
+        self.images.extend(converted_frames)
+        self._video_processing = False
+        self._video_thread = None
+        self._video_worker = None
+
+        if len(self._video_queue) > 0:
+            self._process_next_video()
+        else:
+            print("Finished converting all videos.")
+            self.setText(self._default_text)
+            self.setEnabled(True)
+            QTimer.singleShot(0, lambda: self.parent_widget.load_saved_images(self.project, self.parent_widget.username))
+
+    def _handle_video_error(self, exc):
+        self._video_processing = False
+        self._video_thread = None
+        self._video_worker = None
+        self.setText(self._default_text)
+        self.setEnabled(True)
+        self._process_next_video()
+        QMessageBox.critical(
+            self,
+            "Video conversion failed",
+            f"Could not process one of the uploaded videos: {exc}",
+        )
 
 class ImageLoader:
     def load_files(self, parent):
@@ -62,7 +184,7 @@ class ImageLoader:
             parent,
             "Select Images",
             str(parent.controller.user_folder),
-            "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff);;ZIP Archives(*.zip)"
+            "Images and Videos(*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.mp4 *.avi *.mov *.mkv);;ZIP Archives(*.zip)"
         )
         return files
 
@@ -81,11 +203,11 @@ class UploadLabels(QPushButton):
         self.duplicate_labels = []
 
     def open_dialog(self):
-        self.project = self.parent_widget.project
+        self.project = self.parent_widget.current_project
         files = LabelLoader().load_files(self)
-        save_location_labels = Path(self.controller.user_folder) / self.parent_widget.project / "image_labels"
+        save_location_labels = self.project / "image_labels"
         save_location_labels.mkdir(parents=True, exist_ok=True)
-        save_location_images = Path(self.controller.user_folder) / self.parent_widget.project / "image_uploads"
+        save_location_images = self.project / "image_uploads"
         save_location_images.mkdir(parents=True, exist_ok=True)
 
         if files:
@@ -159,7 +281,7 @@ class UploadLabels(QPushButton):
             corresponding_image = ""
             # Search for corresponding image in the files that were just uploaded and in the image_uploads folder of the project
             if path.suffix.lower() in LABEL_EXTENSIONS:
-                img_folder = Path(self.controller.user_folder) / self.parent_widget.project / "image_uploads"
+                img_folder = Path(self.controller.user_folder) / self.parent_widget.current_project / "image_uploads"
                 for other_file in self.images:
                     if Path(other_file).stem == Path(path).stem and other_file != path:
                         label_has_corresponding_image = True
@@ -187,6 +309,6 @@ class LabelLoader:
             parent,
             "Select Label Files",
             str(parent.controller.user_folder),
-            "Sidecar Labels (*.txt *.xml);;Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff);;Tabular Labels (*.csv *.tsv *.parquet);;Manifest Labels (*.json *.yaml);;Archives (*.zip *.tar)"
+            "Sidecar Labels (*.txt *.xml);;Images and Videos (*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.mp4 *.avi *.mov *.mkv);;Tabular Labels (*.csv *.tsv *.parquet);;Manifest Labels (*.json *.yaml);;Archives (*.zip *.tar)"
         )
         return files

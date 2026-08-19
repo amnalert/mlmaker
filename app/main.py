@@ -38,6 +38,7 @@ class ProjectWindow(QMainWindow):
         self.project_classes = []
         self.labels_without_images = []
         self.project_uuid = ""
+        self.current_project = ""
 
         ### WINDOW SIZING
 
@@ -151,7 +152,7 @@ class ProjectWindow(QMainWindow):
         self.username = user
         self.user_folder = Path(INSTALL_LOCATION / "users" / self.username )
         self.prj_folder = Path(self.user_folder / prj)
-        self.uuid = 
+        self.current_project = prj
 
         # Show images
         if self.prj_folder.exists() and self.prj_folder.is_dir():
@@ -161,6 +162,7 @@ class ProjectWindow(QMainWindow):
                 p for p in img_uploads.iterdir()
                 if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS
             ]
+            imgs = list(dict.fromkeys(imgs))
             self.show_images(imgs)
             cls_list = self.prj_folder / "class_list.txt"
             cls_list.touch()
@@ -323,11 +325,28 @@ class ProjectWindow(QMainWindow):
 
     def view_missing_images(self, labels):
         labels_str = "\n".join([str(label.name) for label in labels])
-        QMessageBox.warning(
-                self,
-                "Warning",
-                f"The following labels do not have corresponding images. Please upload the images that correspond(with the same file name, e.g., image.jpg and image.txt) in order to view the label information.\n\n{labels_str}"
-            )
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Warning")
+        msg.setText("The following labels do not have corresponding images.")
+        msg.setInformativeText(
+            "Please upload the images that correspond (with the same file name, e.g., image.jpg and image.txt) in order to view the label information."
+        )
+        msg.setDetailedText(labels_str)
+        msg.setStandardButtons(QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel)
+        delete_button = msg.addButton("Delete these files", QMessageBox.ButtonRole.ActionRole)
+        msg.setDefaultButton(QMessageBox.StandardButton.Ok)
+
+        result = msg.exec()
+        if msg.clickedButton() == delete_button:
+            for label in labels:
+                try:
+                    if label.exists():
+                        label.unlink()
+                except OSError:
+                    pass
+            self.labels_without_images = []
+            self.check_uploaded_labels()
+            self.view_missing_images_list.setEnabled(False)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
