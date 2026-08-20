@@ -4,8 +4,9 @@ from pathlib import Path
 import shutil
 
 class VideoConverter():
-    def __init__(self):
+    def __init__(self, parents):
         self.extracted_frames = []
+        self.parents = parents
 
     def convert_mp4(self, mp4, prj, output_name=None):
         print(f"[VideoConverter] START convert_mp4 for: {mp4}")
@@ -16,15 +17,14 @@ class VideoConverter():
             print(f"Error: Could not open video file {video}")
             return []
 
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         target_name = output_name or video.stem
         save_location = Path(prj) / "converted_videos" / target_name
         print(f"[VideoConverter] save_location={save_location}")
         save_location.mkdir(parents=True, exist_ok=True)
 
-        print(f"[VideoConverter] copying source video into project folder")
-        shutil.copy2(video, save_location)
-
         frame_count = 0
+        processed_frames = 0
         unique_frames = []
         previous_frame = None
         duplicate_count = 0
@@ -34,6 +34,9 @@ class VideoConverter():
             if not ret:
                 print(f"[VideoConverter] end of video reached after {frame_count} kept frames")
                 break
+
+            processed_frames += 1
+            self.parents.progress.emit(processed_frames, total_frames)
 
             if previous_frame is not None and frame.shape == previous_frame.shape and np.array_equal(frame, previous_frame):
                 duplicate_count += 1
@@ -51,7 +54,7 @@ class VideoConverter():
                 print(f"[VideoConverter] failed to write frame {frame_count} to {frame_path}")
                 break
 
-        # Move all but the video itself to the project / image_uploads folder
+        # Move all folder to the project / image_uploads folder
         shutil.move(str(save_location), str(Path(prj) / "image_uploads" / target_name))
 
         print(f"[VideoConverter] done. kept={len(unique_frames)} duplicate_skips={duplicate_count}")

@@ -1,9 +1,6 @@
-from PySide6.QtWidgets import QWidget, QGridLayout, QPushButton, QComboBox, QFrame, QMainWindow, QLabel, QLineEdit, QHBoxLayout, QLabel, QVBoxLayout, QSizePolicy, QInputDialog, QMessageBox, QStackedWidget, QScrollArea
+from PySide6.QtWidgets import QApplication, QWidget, QGridLayout, QPushButton, QLabel, QLineEdit, QHBoxLayout, QLabel, QVBoxLayout, QSizePolicy, QInputDialog, QMessageBox, QStackedWidget, QScrollArea
 from PySide6.QtCore import QSize, Qt, QTimer, QPoint
-from PySide6.QtGui import QPainter, QPixmap, QIcon, QFont
-import sys, os
-import json
-import math
+from PySide6.QtGui import QPainter, QPixmap, QIcon, QFont, QKeyEvent
 from pathlib import Path
 
 from labelling_controls import ImageLabellingControls
@@ -127,7 +124,10 @@ class ImageView(QWidget):
         self.orig_pixmap = QPixmap(str(img))
         self.project = self.controller.home.current_project
         self.species = self.controller.home.project_classes
-        self.image_label_file = Path(prj / "image_labels" / f"{img.stem}.txt")
+        label_folder = prj / "image_labels"
+        if img.parent.name != "image_uploads":
+            label_folder /= img.parent.name
+        self.image_label_file = label_folder / f"{img.stem}.txt"
         self.image_label_file.parent.mkdir(parents=True, exist_ok=True)
         self.image_label_file.touch()
         self.img_index_lbl.setText(f"Image: {self.img_index + 1}/{len(self.images)}")
@@ -165,3 +165,82 @@ class FirstPass(QWidget):
         self.controller = controller
 
         self.setWindowTitle("First Pass")
+
+        self.controls_dialog = QLabel(
+            """
+            Left Key    - Mark to delete
+            Right Key   - Mark to save
+            Spacebar    - Next Frame / Skip
+            Shift Key   - Previous Frame / Back
+
+            X Key       - Toggle auto skip to next Frame on Left/Right Key press(Default: True)
+            C Key       - Hold to display these controls
+
+            Enter Key   - Display unmarked Frames / Confirm Selection(Opens dialog box before deletion)
+            Escape Key  - Open Menu: Cancel this Video's Import, Save for later and Exit
+            """
+        )
+
+        self.menu_dialog = QWidget(self, Qt.WindowType.Dialog)
+        screen = QApplication.primaryScreen().availableGeometry()
+        self.menu_dialog.resize(int(screen.width() * 0.5), int(screen.height() * 0.5))
+        self.menu_dialog.move(screen.center() - self.menu_dialog.rect().center())
+        self.menu_layout = QVBoxLayout()
+        self.menu_dialog.setLayout(self.menu_layout)
+        self.menu_text = QLabel("First Pass Menu")
+        self.cancel_vid_btn = QPushButton("Remove Video From Project")
+        self.save_later_btn = QPushButton("Save for later and Exit")
+        self.cancel_vid_btn.clicked.connect(lambda _: self.cancel_this_video())
+        self.save_later_btn.clicked.connect(lambda _: self.save_and_quit())
+
+        self.menu_layout.addWidget(self.menu_text, alignment=(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter))
+        self.menu_layout.addWidget(self.cancel_vid_btn, alignment=(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter))
+        self.menu_layout.addWidget(self.save_later_btn, alignment=(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter))
+
+        # Internal info
+        self.current_video_folder = ""
+        self.current_project = ""
+
+    def keyPressEvent(self, event: QKeyEvent):
+        if event.key() == Qt.Key.Key_Escape:
+            self.menu_dialog.show()
+
+        elif event.key() == Qt.Key.Key_Right:
+            pass
+
+        elif event.key() == Qt.Key.Key_Left:
+            pass
+
+    def begin_pass(self, video, video_folder, prj_folder):
+        self.current_video_folder = video_folder
+        self.current_video = video # which is in video_folder / "{video_folder.stem}.mp4/mov/etc"
+        self.current_project = prj_folder # video_folder.parent.parent
+
+        QMessageBox.information(
+            self,
+            "How to do a First Pass",
+            f"""
+            After uploading a video, it converts itself to individual frames. It is useful to run a 'First Pass' by quickly going through all frames and selecting frames for deletion(e.g. if the frame has no objects in it).
+
+            The controls are as follows:
+
+            {self.controls_dialog.text()}
+            """
+        )
+
+    def cancel_this_video(self):
+        reply = QMessageBox.question(
+            self,
+            "Remove Video from Project",
+            f"Are you sure you want to remove video '{self.current_video.name}' from the project, which will also remove all of its image Frames? All labels will be lost!",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            pass
+
+    def save_and_quit(self):
+        save_location = Path(self.current_project) / "first_pass_saves"
+        save_location.mkdir(parents=True, exist_ok=True)
+
+        

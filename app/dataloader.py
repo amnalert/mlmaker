@@ -3,15 +3,16 @@ from PySide6.QtCore import QTimer, QThread, QObject, Signal
 import zipfile
 from pathlib import Path
 import shutil
+import tempfile
 
 from video_converter import VideoConverter
-
 
 class VideoConvertWorker(QObject):
     finished = Signal(object)
     failed = Signal(str)
+    progress = Signal(int, int)
 
-    def __init__(self, video_path, project_path, output_name=None):
+    def __init__(self, video_path, project_path, output_name):
         super().__init__()
         self.video_path = video_path
         self.project_path = project_path
@@ -19,8 +20,12 @@ class VideoConvertWorker(QObject):
 
     def run(self):
         try:
-            converter = VideoConverter()
+            converter = VideoConverter(self)
             converted_frames = converter.convert_mp4(self.video_path, self.project_path, self.output_name)
+            label_folder = Path(self.project_path) / "image_labels" / Path(self.output_name)
+            label_folder.mkdir(parents=True, exist_ok=True)
+            for frame in converted_frames:
+                (label_folder / f"{Path(frame).stem}.txt").touch()
             self.finished.emit(converted_frames)
         except Exception as exc:
             self.failed.emit(str(exc))
@@ -29,11 +34,10 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv"}
 LABEL_EXTENSIONS = {".csv", ".tsv", ".xml", ".txt", ".parquet", ".json", ".yml", ".yaml", ".tar"}
 
-
 def extract_zip_contents(zip_path, image_location, downloads_location):
     image_location.mkdir(parents=True, exist_ok=True)
     downloads_location.mkdir(parents=True, exist_ok=True)
-    extracted_images = []
+    extracted_files = []
 
     with zipfile.ZipFile(zip_path, "r") as archive:
         for member in archive.infolist():
@@ -46,19 +50,20 @@ def extract_zip_contents(zip_path, image_location, downloads_location):
 
             if member_path.suffix.lower() in IMAGE_EXTENSIONS:
                 destination = image_location / member_path.name
-                counter = 1
-                while destination.exists():
-                    destination = image_location / f"{member_path.stem}_{counter}{member_path.suffix}"
-                    counter += 1
-                extracted_images.append(destination)
             else:
                 destination = downloads_location / member_path
                 destination.parent.mkdir(parents=True, exist_ok=True)
 
+            counter = 1
+            while destination.exists():
+                destination = destination.parent / f"{destination.stem}_{counter}{destination.suffix}"
+                counter += 1
+            extracted_files.append(destination)
+
             with archive.open(member) as source, open(destination, "wb") as target:
                 shutil.copyfileobj(source, target)
 
-    return extracted_images
+    return extracted_files
 
 class UploadImages(QPushButton):
     def __init__(self, parents, controller):
@@ -67,7 +72,7 @@ class UploadImages(QPushButton):
         self.parent_widget = parents
 
         self.project = ""
-        self._video_queue = []
+        self.video_queue = []
         self._video_processing = False
         self._default_text = "Upload Unlabelled Images/Videos"
         self._video_thread = None
@@ -78,6 +83,7 @@ class UploadImages(QPushButton):
 
     def open_dialog(self):
         self.project = self.parent_widget.current_project
+        self.project_uuid = self.parent_widget.uuid
         files = ImageLoader().load_files(self)
 
         save_location = self.project / "image_uploads"
@@ -85,48 +91,37 @@ class UploadImages(QPushButton):
         if files:
             for file in files:
                 path = Path(file)
-                dest = save_location / path.name
+                dest = save_location / "singlet_images" /path.name
                 counter = 1
                 while dest.exists():
-                    dest = save_location / f"{path.stem}_{counter}{path.suffix}"
+                    dest = save_location / "singlet_images" / f"{path.stem}_{counter}{path.suffix}"
                     counter += 1
                 if path.suffix.lower() == ".zip":
-                    with zipfile.ZipFile(path, "r") as z:
-                        for member in z.infolist():
-                            source_name = Path(member.filename)
-
-                            # Skip directories
-                            if member.is_dir():
-                                continue
-
-                            destination = save_location / source_name.name
-
-                            # Rename if it already exists
-                            counter = 1
-                            while destination.exists():
-                                destination = save_location / f"{source_name.stem}_{counter}{source_name.suffix}"
-                                counter += 1
-
-                            with z.open(member) as source, open(destination, "wb") as target:
-                                self.images.append(destination)
-                                shutil.copyfileobj(source, target)
+                    extracted_files = extract_zip_contents(path, save_location, save_location)
+                    for destination in extracted_files:
+                        if destination.suffix.lower() in VIDEO_EXTENSIONS:
+                            resolved_video = self._resolve_video_name(destination)
+                            if resolved_video is not None:
+                                self.video_queue.append((destination, Path(self.project), resolved_video))
+                        elif destination.suffix.lower() in IMAGE_EXTENSIONS:
+                            self.images.append(destination)
                 elif path.suffix.lower() in IMAGE_EXTENSIONS:
                     self.images.append(dest)
                     shutil.copy2(path, dest)
                 elif path.suffix.lower() in VIDEO_EXTENSIONS:
                     resolved_video = self._resolve_video_name(path)
                     if resolved_video is not None:
-                        self._video_queue.append((path, Path(self.project), resolved_video))
+                        self.video_queue.append((path, Path(self.project), resolved_video))
 
-            if self._video_queue:
+            if self.video_queue:
                 self._process_next_video()
                 return
 
         self.images = []
-        self.parent_widget.load_saved_images(self.project, self.parent_widget.username)
+        self.parent_widget.load_saved_images(self.project, self.parent_widget.username, self.project_uuid)
 
     def _resolve_video_name(self, video_path):
-        converted_dir = Path(self.project) / "converted_videos"
+        converted_dir = Path(self.project) / "converting_videos"
         converted_dir.mkdir(parents=True, exist_ok=True)
 
         base_name = video_path.stem
@@ -154,25 +149,26 @@ class UploadImages(QPushButton):
         return None
 
     def _process_next_video(self):
-        if self._video_processing or not self._video_queue:
-            if not self._video_processing and not self._video_queue:
+        if self._video_processing or not self.video_queue:
+            if not self._video_processing and not self.video_queue:
                 self.images = []
                 self.setText(self._default_text)
                 self.setEnabled(True)
-                print("Finished converting all videos.")
-                QTimer.singleShot(0, lambda: self.parent_widget.load_saved_images(self.project, self.parent_widget.username))
+                print("[VideoConverter] Finished converting all videos.")
+                QTimer.singleShot(0, lambda: self.parent_widget.load_saved_images(self.project, self.parent_widget.username, self.project_uuid))
             return
 
         self._video_processing = True
         self.setEnabled(False)
-        self.setText("Processing video...")
+        self.setText("Converting video 1 of 1 (0/0 Frames)")
 
-        video_path, project_path, output_name = self._video_queue.pop(0)
+        video_path, project_path, output_name = self.video_queue.pop(0)
         self._video_thread = QThread(self)
         self._video_worker = VideoConvertWorker(video_path, project_path, output_name)
         self._video_worker.moveToThread(self._video_thread)
 
         self._video_thread.started.connect(self._video_worker.run)
+        self._video_worker.progress.connect(self._handle_video_progress)
         self._video_worker.finished.connect(self._handle_video_result)
         self._video_worker.failed.connect(self._handle_video_error)
         self._video_worker.finished.connect(self._video_thread.quit)
@@ -183,19 +179,25 @@ class UploadImages(QPushButton):
 
         self._video_thread.start()
 
+    def _handle_video_progress(self, processed_frames, total_frames):
+        self.setText(
+            f"Converting video ({len(self.video_queue)} Remaining) "
+            f"(Frame {processed_frames}/{total_frames})"
+        )
+
     def _handle_video_result(self, converted_frames):
         self.images.extend(converted_frames)
         self._video_processing = False
         self._video_thread = None
         self._video_worker = None
 
-        if len(self._video_queue) > 0:
+        if len(self.video_queue) > 0:
             self._process_next_video()
         else:
             print("Finished converting all videos.")
             self.setText(self._default_text)
             self.setEnabled(True)
-            QTimer.singleShot(0, lambda: self.parent_widget.load_saved_images(self.project, self.parent_widget.username))
+            QTimer.singleShot(0, lambda: self.parent_widget.load_saved_images(self.project, self.parent_widget.username, self.project_uuid))
 
     def _handle_video_error(self, exc):
         self._video_processing = False
@@ -236,6 +238,7 @@ class UploadLabels(QPushButton):
 
     def open_dialog(self):
         self.project = self.parent_widget.current_project
+        self.project_uuid = self.parent_widget.uuid
         files = LabelLoader().load_files(self)
         save_location_labels = self.project / "image_labels"
         save_location_labels.mkdir(parents=True, exist_ok=True)
@@ -244,10 +247,19 @@ class UploadLabels(QPushButton):
 
         if files:
             for file in files:
-                if Path(file).suffix.lower() in IMAGE_EXTENSIONS:
-                    self.images.append(Path(file))
-                elif Path(file).suffix.lower() in LABEL_EXTENSIONS:
-                    self.labels.append(Path(file))
+                path = Path(file)
+                if path.suffix.lower() == ".zip":
+                    with tempfile.TemporaryDirectory() as staging_directory:
+                        extracted_files = extract_zip_contents(
+                            path,
+                            save_location_images,
+                            Path(staging_directory),
+                        )
+                        self._add_extracted_files(extracted_files)
+                elif path.suffix.lower() in IMAGE_EXTENSIONS:
+                    self.images.append(path)
+                elif path.suffix.lower() in LABEL_EXTENSIONS:
+                    self.labels.append(path)
 
             for path in self.images:
                 self.copy_to_project(path, "images", save_location_images)
@@ -265,7 +277,14 @@ class UploadLabels(QPushButton):
             self.images = []
             self.labels = []
             self.duplicate_labels = []
-            self.parent_widget.load_saved_images(self.project)
+            self.parent_widget.load_saved_images(self.project, self.parent_widget.username, self.project_uuid)
+
+    def _add_extracted_files(self, extracted_files):
+        for path in extracted_files:
+            if path.suffix.lower() in IMAGE_EXTENSIONS:
+                self.images.append(path)
+            elif path.suffix.lower() in LABEL_EXTENSIONS:
+                self.labels.append(path)
 
     def copy_to_project(self, path, type, save_location):
         if type == "images":
@@ -282,27 +301,7 @@ class UploadLabels(QPushButton):
                     self.labels = [label if label.stem != path.stem else Path(label.parent / new_label_name) for label in self.labels]
                 counter += 1
 
-            if path.suffix.lower() == ".zip":
-                with zipfile.ZipFile(path, "r") as z:
-                    for member in z.infolist():
-                        source_name = Path(member.filename)
-
-                        # Skip directories
-                        if member.is_dir():
-                            continue
-
-                        destination = save_location / source_name.name
-
-                        # Rename if it already exists
-                        counter = 1
-                        while destination.exists():
-                            destination = save_location / f"{source_name.stem}_{counter}{source_name.suffix}"
-                            counter += 1
-
-                        with z.open(member) as source, open(destination, "wb") as target:
-                            self.labels.append(destination)
-                            shutil.copyfileobj(source, target)
-            elif path.suffix.lower() in IMAGE_EXTENSIONS:
+            if path.suffix.lower() in IMAGE_EXTENSIONS:
                 shutil.copy2(path, dest)
 
         elif type == "labels":
