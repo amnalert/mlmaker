@@ -59,9 +59,10 @@ class MainController(QMainWindow):
         self.login_page = LoginWindow(self)
         self.create_account_page = NewAccountWindow(self)
         self.home = ProjectWindow(self)
-        self.image_viewer = ImageView(self)
+        self.image_viewer = ImageView(True, self)
         self.proj_explorer = ProjectExplorer(self)
         self.network_page = NetworkExplorer(self)
+        self.first_pass_page = FirstPass(self)
             # Add to stacked widget
         self.sw.addWidget(self.login_page)          # self.controller.switch_page(0)
         self.sw.addWidget(self.create_account_page) # self.controller.switch_page(1)
@@ -69,6 +70,7 @@ class MainController(QMainWindow):
         self.sw.addWidget(self.image_viewer)        # self.controller.switch_page(3)
         self.sw.addWidget(self.proj_explorer)       # self.controller.switch_page(4)
         self.sw.addWidget(self.network_page)        # self.controller.switch_page(5)
+        self.sw.addWidget(self.first_pass_page)     # self.controller.switch_page(6)
 
         self.sw.setCurrentIndex(0)
 

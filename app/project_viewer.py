@@ -28,11 +28,14 @@ class ProjectWindow(QMainWindow):
 
         # User info
         self.username = self.controller.username
+        self.folder_icon = Path(INSTALL_LOCATION) / "assets" / "app_pics" / "folder.png"
 
         # Images
         self.images = []
         self.images_per_page = 20
         self.current_page = 0
+        self.needs_fp = []
+        self.needs_fp_file = Path(INSTALL_LOCATION)
 
         # Project
         self.project_classes = []
@@ -152,13 +155,21 @@ class ProjectWindow(QMainWindow):
         self.controller.network_page.receive_data(self.username, self.prj_folder)
         self.controller.switch_page(5)
 
-    def load_saved_images(self, prj, user_folder, prj_uuid):
+    def load_saved_images(self, prj, user_folder, prj_uuid, needs_fp):
         self.user_folder = user_folder
-        self.user_folder = Path(INSTALL_LOCATION / "users" / self.user_folder)
         self.prj_folder = Path(self.user_folder / prj)
         self.current_project = prj
         self.uuid = prj_uuid
-        self.current_project = prj
+        self.needs_fp_file = Path(self.user_folder) / prj / "needs_first_pass.txt"
+        self.needs_fp_file.touch(exist_ok=True)
+        # needs_fp_file has one image per line with the relative path being image_uploads/(video_name or singlet_images)/image_name.jpg
+        self.needs_fp.extend(self.needs_fp_file.read_text().strip().splitlines())
+        first_img = False
+        if len(self.needs_fp) > 0:
+            # Show a folder icon in place of all the images
+            first_img = self.folder_icon
+            if len(needs_fp) > 0:
+                self.needs_fp.extend(needs_fp)
 
         # Show images
         if self.prj_folder.exists() and self.prj_folder.is_dir():
@@ -168,6 +179,8 @@ class ProjectWindow(QMainWindow):
                 p for p in img_uploads.rglob("*")
                 if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS
             ]
+            if first_img:
+                imgs.insert(0, first_img)
             imgs = list(dict.fromkeys(imgs))
             self.show_images(imgs)
             cls_list = self.prj_folder / "class_list.txt"
@@ -179,7 +192,8 @@ class ProjectWindow(QMainWindow):
         self.check_uploaded_labels()
 
     def show_images(self, img_list):
-        self.images = [f for f in img_list if Path(f).is_file()]
+        # remove self.needs_fp while still leaving the folder image there
+        self.images = [f for f in img_list if Path(f).is_file() and f not in self.needs_fp]
         self.current_page = 0
         self.update_image_page()
 
@@ -226,7 +240,10 @@ class ProjectWindow(QMainWindow):
             img_btn.setIcon(QIcon(thumb))
             img_btn.setIconSize(QSize(thumb_width - 10, thumb_height - 10))
 
-            img_btn.clicked.connect(lambda checked=False, image=img: self.inspect_img(image))
+            if img == self.folder_icon:
+                img_btn.clicked.connect(lambda _: (self.controller.switch_page(6), self.controller.first_pass_page.begin_pass(self.needs_fp, self.current_project)))
+            else:
+                img_btn.clicked.connect(lambda image=img: self.inspect_img(image))
             self.scroll_layout.addWidget(img_btn, row, column)
 
         self.update_pagination_controls()

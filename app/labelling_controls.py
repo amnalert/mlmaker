@@ -1,6 +1,6 @@
 from PySide6.QtGui import QCursor, QMouseEvent, QPainter, QPen, QKeyEvent, QColor, QFont
 from PySide6.QtCore import QPoint, Qt, QEvent, QRectF
-from PySide6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QSizePolicy, QComboBox, QInputDialog
+from PySide6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QSizePolicy, QComboBox, QInputDialog, QGridLayout, QScrollArea
 from pathlib import Path
 import math
 
@@ -45,8 +45,48 @@ class ImageLabellingControls(QWidget):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.mouse_pos = QPoint(-1, -1)
 
+        # Labelling UI widgets
+        self.image_name = QLabel()
+        self.box_label_1 = QLabel("Point 1: (0, 0)")
+        self.box_label_2 = QLabel("Point 2: (0, 0)")
+        self.mouse_pos_label = QLabel("Mouse: (0, 0)")
+        
+        # Placed boxes scroll area
+        self.scroll_boxes_content = QWidget()
+        self.scroll_boxes_layout = QGridLayout(self.scroll_boxes_content)
+        self.scroll_boxes_layout.setContentsMargins(0, 0, 0, 0)
+        self.scroll_boxes_layout.setSpacing(5)
+        
+        self.scroll_boxes = QScrollArea()
+        self.scroll_boxes.setWidgetResizable(True)
+        self.scroll_boxes.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll_boxes.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.scroll_boxes.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.scroll_boxes.setWidget(self.scroll_boxes_content)
+        
+        # Buttons
+        self.change_default_class_btn = QPushButton("Change default class")
+        self.change_default_class_btn.clicked.connect(self.change_default_class)
+        
+        self.show_all_boxes_btn = QPushButton("Show all boxes")
+        self.show_all_boxes_btn.clicked.connect(lambda: self._draw_all_boxes())
+        
+        # Species and project info
+        self.species = []
+        self.project = ""
+
         self.parent_label.installEventFilter(self)
         self.resize(self.parent_label.size())
+
+    def change_default_class(self):
+        choice, ok = QInputDialog.getItem(
+            self,
+            "Choose default class",
+            "Select a class new boxes will be assigned from the following:",
+            self.species
+        )
+        if ok and choice:
+            self.default_class = choice
 
     def keyPressEvent(self, event: QKeyEvent):
         if event.key() == Qt.Key.Key_Escape:
@@ -79,25 +119,23 @@ class ImageLabellingControls(QWidget):
         
         self.setFocus()
 
-        self.default_class = self.parents.default_class
-
         if event.button() == Qt.MouseButton.RightButton:
             self.color_index = (self.color_index + 1) % len(self.colors)
             self.update()
         elif event.button() == Qt.MouseButton.LeftButton:
             if self.current_box[0] == (-1, -1):
                 self.current_box[0] = (x, y)
-                self.parents.box_label_1.setText(f"Point 1: {x, y}")
-                self.parents.box_label_2.setText(f"Point 2: (0, 0)")
+                self.box_label_1.setText(f"Point 1: {x, y}")
+                self.box_label_2.setText(f"Point 2: (0, 0)")
             else:
                 def_class = ""
                 if self.default_class != "none":
                     def_class = self.default_class
                 else:
-                    def_class = self.parents.species[0]
+                    def_class = self.species[0]
 
                 self.current_box[1] = (x, y)
-                self.parents.box_label_2.setText(f"Point 2: {x, y}")
+                self.box_label_2.setText(f"Point 2: {x, y}")
                 self.write_box_data(self.current_box, def_class)
                 self.current_box = [(-1, -1), (-1, -1)]
                 
@@ -192,7 +230,7 @@ class ImageLabellingControls(QWidget):
             pen = QPen(self.colors[self.color_index], 1, Qt.PenStyle.DashLine)
             painter.setPen(pen)
 
-            self.parents.mouse_pos_label.setText(f"Mouse: ({mx}, {my})")
+            self.mouse_pos_label.setText(f"Mouse: ({mx}, {my})")
 
             clamped_x = min(max(mx, x_offset), x_offset + draw_w)
             clamped_y = min(max(my, y_offset), y_offset + draw_h)
@@ -218,8 +256,8 @@ class ImageLabellingControls(QWidget):
     def reset_box(self):
         if self.current_box[0] != (-1, -1):
             self.current_box = [(-1, -1), (-1, -1)]
-            self.parents.box_label_1.setText(f"Point 1: (0, 0)")
-            self.parents.box_label_2.setText(f"Point 2: (0, 0)")
+            self.box_label_1.setText(f"Point 1: (0, 0)")
+            self.box_label_2.setText(f"Point 2: (0, 0)")
 
     def write_box_data(self, box, boxclass):
         if box[0] != (-1, -1) and box[1] != (-1, -1):
@@ -265,15 +303,17 @@ class ImageLabellingControls(QWidget):
 
     def update_visible_boxes(self, boxes_labels):
         self.boxes_lines = boxes_labels
-        while self.parents.scroll_boxes_layout.count():
-            item = self.parents.scroll_boxes_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+        while self.scroll_boxes_layout.count():
+            item = self.scroll_boxes_layout.takeAt(0)
+            if item is not None:
+                widget = item.widget()
+                if widget is not None:
+                    widget.deleteLater()
 
-        self.parents.scroll_boxes_layout.setColumnStretch(0, 1)
-        self.parents.scroll_boxes_layout.setColumnStretch(1, 1)
-        self.parents.scroll_boxes_layout.setHorizontalSpacing(8)
-        self.parents.scroll_boxes_layout.setVerticalSpacing(8)
+        self.scroll_boxes_layout.setColumnStretch(0, 1)
+        self.scroll_boxes_layout.setColumnStretch(1, 1)
+        self.scroll_boxes_layout.setHorizontalSpacing(8)
+        self.scroll_boxes_layout.setVerticalSpacing(8)
 
         for idx, box in enumerate(boxes_labels):
             row = idx // 2
@@ -313,7 +353,7 @@ class ImageLabellingControls(QWidget):
 
             species_list_dropdown = QComboBox()
             species_list_dropdown.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-            species_list_dropdown.addItems(self.parents.species)
+            species_list_dropdown.addItems(self.species)
             species_list_dropdown.setCurrentText(box.split(' ')[0])
             species_list_dropdown.currentTextChanged.connect(lambda: self.change_species_label(box, species_list_dropdown.currentText()))
 
@@ -323,7 +363,7 @@ class ImageLabellingControls(QWidget):
             boxinfo_layout.addWidget(box_info, alignment=Qt.AlignmentFlag.AlignTop)
             boxinfo_layout.addLayout(buttons_layout)
 
-            self.parents.scroll_boxes_layout.addWidget(
+            self.scroll_boxes_layout.addWidget(
                 box_container,
                 row,
                 col,

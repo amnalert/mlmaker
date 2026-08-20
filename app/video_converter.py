@@ -5,12 +5,10 @@ import shutil
 
 class VideoConverter():
     def __init__(self, parents):
-        self.extracted_frames = []
         self.parents = parents
 
     def convert_mp4(self, mp4, prj, output_name=None):
         print(f"[VideoConverter] START convert_mp4 for: {mp4}")
-        self.extracted_frames = []
         video = Path(mp4)
         cap = cv2.VideoCapture(str(video))
         if not cap.isOpened():
@@ -19,7 +17,8 @@ class VideoConverter():
 
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         target_name = output_name or video.stem
-        save_location = Path(prj) / "converted_videos" / target_name
+        save_location = Path(prj) / "converting_videos" / target_name
+        fp_txt = Path(prj) / "needs_first_pass.txt"
         print(f"[VideoConverter] save_location={save_location}")
         save_location.mkdir(parents=True, exist_ok=True)
 
@@ -61,5 +60,8 @@ class VideoConverter():
         cap.release()
         cv2.destroyAllWindows()
 
-        self.extracted_frames = unique_frames
+        with open(fp_txt, "+a") as f:
+            for frame in unique_frames:
+                f.write(f"{frame}\n")
+
         return unique_frames

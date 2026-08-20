@@ -347,7 +347,7 @@ class ProjectExplorer(QMainWindow):
 
         self.controller.switch_page(2)
         self.controller.home.load_saved_images(
-            prj, self.user_folder, project_data["uuid"]
+            prj, self.user_folder, project_data["uuid"], []
         )
 
     def move_to_shared(self, prj, ptype):

@@ -78,6 +78,8 @@ class UploadImages(QPushButton):
         self._video_thread = None
         self._video_worker = None
 
+        self.needs_fp = []
+
         self.clicked.connect(self.open_dialog)
         self.images = []
 
@@ -87,11 +89,12 @@ class UploadImages(QPushButton):
         files = ImageLoader().load_files(self)
 
         save_location = self.project / "image_uploads"
-        save_location.mkdir(parents=True, exist_ok=True)
+        singlet_location = self.project / "image_uploads" / "singlet_images"
+        singlet_location.mkdir(parents=True, exist_ok=True)
         if files:
             for file in files:
                 path = Path(file)
-                dest = save_location / "singlet_images" /path.name
+                dest = save_location / "singlet_images" / path.name
                 counter = 1
                 while dest.exists():
                     dest = save_location / "singlet_images" / f"{path.stem}_{counter}{path.suffix}"
@@ -118,7 +121,7 @@ class UploadImages(QPushButton):
                 return
 
         self.images = []
-        self.parent_widget.load_saved_images(self.project, self.parent_widget.username, self.project_uuid)
+        self.parent_widget.load_saved_images(self.project, self.parent_widget.username, self.project_uuid, self.needs_fp)
 
     def _resolve_video_name(self, video_path):
         converted_dir = Path(self.project) / "converting_videos"
@@ -155,7 +158,7 @@ class UploadImages(QPushButton):
                 self.setText(self._default_text)
                 self.setEnabled(True)
                 print("[VideoConverter] Finished converting all videos.")
-                QTimer.singleShot(0, lambda: self.parent_widget.load_saved_images(self.project, self.parent_widget.username, self.project_uuid))
+                QTimer.singleShot(0, lambda: self.parent_widget.load_saved_images(self.project, self.parent_widget.username, self.project_uuid, self.needs_fp))
             return
 
         self._video_processing = True
@@ -181,11 +184,12 @@ class UploadImages(QPushButton):
 
     def _handle_video_progress(self, processed_frames, total_frames):
         self.setText(
-            f"Converting video ({len(self.video_queue)} Remaining) "
+            f"Converting video ({len(self.video_queue) + 1} Remaining) "
             f"(Frame {processed_frames}/{total_frames})"
         )
 
     def _handle_video_result(self, converted_frames):
+        self.needs_fp.extend(converted_frames)
         self.images.extend(converted_frames)
         self._video_processing = False
         self._video_thread = None
@@ -197,7 +201,7 @@ class UploadImages(QPushButton):
             print("Finished converting all videos.")
             self.setText(self._default_text)
             self.setEnabled(True)
-            QTimer.singleShot(0, lambda: self.parent_widget.load_saved_images(self.project, self.parent_widget.username, self.project_uuid))
+            QTimer.singleShot(0, lambda: self.parent_widget.load_saved_images(self.project, self.parent_widget.username, self.project_uuid, self.needs_fp))
 
     def _handle_video_error(self, exc):
         self._video_processing = False
@@ -277,7 +281,7 @@ class UploadLabels(QPushButton):
             self.images = []
             self.labels = []
             self.duplicate_labels = []
-            self.parent_widget.load_saved_images(self.project, self.parent_widget.username, self.project_uuid)
+            self.parent_widget.load_saved_images(self.project, self.parent_widget.username, self.project_uuid, [])
 
     def _add_extracted_files(self, extracted_files):
         for path in extracted_files:
@@ -340,6 +344,6 @@ class LabelLoader:
             parent,
             "Select Label Files",
             str(parent.controller.user_folder),
-            "Sidecar Labels (*.txt *.xml);;Images and Videos (*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.mp4 *.avi *.mov *.mkv);;Tabular Labels (*.csv *.tsv *.parquet);;Manifest Labels (*.json *.yaml);;Archives (*.zip *.tar)"
+            "Sidecar Labels (*.txt *.xml);;Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff);;Tabular Labels (*.csv *.tsv *.parquet);;Manifest Labels (*.json *.yaml);;Archives (*.zip *.tar)"
         )
         return files

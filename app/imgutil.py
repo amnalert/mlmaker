@@ -2,13 +2,17 @@ from PySide6.QtWidgets import QApplication, QWidget, QGridLayout, QPushButton, Q
 from PySide6.QtCore import QSize, Qt, QTimer, QPoint
 from PySide6.QtGui import QPainter, QPixmap, QIcon, QFont, QKeyEvent
 from pathlib import Path
+import shutil
 
 from labelling_controls import ImageLabellingControls
 
+INSTALL_LOCATION = Path(__file__).resolve().parent.parent
+
 class ImageView(QWidget):
-    def __init__(self, controller):
+    def __init__(self, side_view, controller):
         super().__init__()
         self.controller = controller
+        self.side_view = side_view
 
         self.project = ""
         self.images = []
@@ -51,89 +55,68 @@ class ImageView(QWidget):
         self.image_scroll_area = QScrollArea()
         self.image_scroll_area.setWidget(self.image_label)
         self.image_scroll_area.setWidgetResizable(True)
+        self.image_scroll_area.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.image_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.image_scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.image_scroll_area.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.image_scroll_area.setMinimumSize(QSize(120, 120))
 
-        # Crosshair on image hover
-        self.img_labelling_controls = ImageLabellingControls(self, self.image_label)
-
         imglayout.addWidget(self.image_scroll_area, stretch=1)
         imglayout.addWidget(self.back_button)
         imglayout.addWidget(self.img_index_lbl)
 
-        ### Right-side UI
+        # Always create labelling controls and UI widgets (for both side_view True and False)
+        self.img_labelling_controls = ImageLabellingControls(self, self.image_label)
 
-        right_layout = QVBoxLayout()
-        main_layout.addLayout(right_layout)
+        self.image_name = self.img_labelling_controls.image_name
+        self.box_label_1 = self.img_labelling_controls.box_label_1
+        self.box_label_2 = self.img_labelling_controls.box_label_2
+        self.mouse_pos_label = self.img_labelling_controls.mouse_pos_label
+        self.scroll_boxes = self.img_labelling_controls.scroll_boxes
+        self.change_default_class_btn = self.img_labelling_controls.change_default_class_btn
+        self.show_all_boxes_btn = self.img_labelling_controls.show_all_boxes_btn
 
-        # Top to bottom
-        self.image_name = QLabel()
-        self.box_label_1 = QLabel("Point 1: (0, 0)")
-        self.box_label_2 = QLabel("Point 2: (0, 0)")
-        self.mouse_pos_label = QLabel("Mouse: (0, 0)")
+        if self.side_view:
+            ### Right-side UI - Only add to layout if side_view is True
+            right_layout = QVBoxLayout()
+            main_layout.addLayout(right_layout)
 
-        # Placed boxes scroll area
-        self.scroll_boxes_content = QWidget()
-        self.scroll_boxes_layout = QGridLayout(self.scroll_boxes_content)
-        self.scroll_boxes_layout.setContentsMargins(0, 0, 0, 0)
-        self.scroll_boxes_layout.setSpacing(5)
-
-        self.scroll_boxes = QScrollArea()
-        self.scroll_boxes.setWidgetResizable(True)
-        self.scroll_boxes.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.scroll_boxes.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-
-            # Resize policies
-        self.scroll_boxes.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-
-            # Add to layout
-        right_layout.addWidget(self.image_name, alignment=(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter))
-        right_layout.addWidget(self.box_label_1, alignment=(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter))
-        right_layout.addWidget(self.box_label_2, alignment=(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter))
-        right_layout.addWidget(self.mouse_pos_label, alignment=(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter))
-        right_layout.addWidget(self.scroll_boxes, stretch=1)
-
-        self.scroll_boxes.setWidget(self.scroll_boxes_content)
-
-        # Default class
-        self.change_default_class_btn = QPushButton("Change default class")
-        self.change_default_class_btn.clicked.connect(self.change_default_class)
-        right_layout.addWidget(self.change_default_class_btn)
-
-        # Show all boxes
-        self.show_all_boxes_btn = QPushButton("Show all boxes")
-        self.show_all_boxes_btn.clicked.connect(lambda: self.img_labelling_controls._draw_all_boxes())
-        right_layout.addWidget(self.show_all_boxes_btn, alignment=(Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter))
-
-    def change_default_class(self):
-        choice, ok = QInputDialog.getItem(
-            self,
-            "Choose default class",
-            "Select a class new boxes will be assigned from the following:",
-            self.species
-        )
-        if ok and choice:
-            self.default_class = choice
+                # Add to layout
+            right_layout.addWidget(self.image_name, alignment=(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter))
+            right_layout.addWidget(self.box_label_1, alignment=(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter))
+            right_layout.addWidget(self.box_label_2, alignment=(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter))
+            right_layout.addWidget(self.mouse_pos_label, alignment=(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter))
+            right_layout.addWidget(self.scroll_boxes, stretch=1)
+            right_layout.addWidget(self.change_default_class_btn)
+            right_layout.addWidget(self.show_all_boxes_btn, alignment=(Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter))
 
     def view_image(self, img, prj, img_list):
         self.images = img_list
         self.img_index = img_list.index(img)
         self.image_name.setText(f"{img.parent.name}/{img.name}")
         self.orig_pixmap = QPixmap(str(img))
-        self.project = self.controller.home.current_project
-        self.species = self.controller.home.project_classes
-        label_folder = prj / "image_labels"
-        if img.parent.name != "image_uploads":
-            label_folder /= img.parent.name
-        self.image_label_file = label_folder / f"{img.stem}.txt"
-        self.image_label_file.parent.mkdir(parents=True, exist_ok=True)
-        self.image_label_file.touch()
-        self.img_index_lbl.setText(f"Image: {self.img_index + 1}/{len(self.images)}")
-        self.image_label.setPixmap(self.orig_pixmap)
-        self.update_image()
-        self.img_labelling_controls.load_saved_boxes(self.image_label_file)
+        self.project = prj
+
+        # Sync with img_labelling_controls
+        if self.side_view:
+            self.species = self.controller.home.project_classes
+            self.img_labelling_controls.species = self.species
+            self.img_labelling_controls.project = self.project
+        
+            label_folder = prj / "image_labels"
+            if img.parent.name != "image_uploads":
+                label_folder /= img.parent.name
+            self.image_label_file = label_folder / f"{img.stem}.txt"
+            self.image_label_file.parent.mkdir(parents=True, exist_ok=True)
+            self.image_label_file.touch()
+            self.img_index_lbl.setText(f"Image: {self.img_index + 1}/{len(self.images)}")
+            self.image_label.setPixmap(self.orig_pixmap)
+            self.update_image()
+            self.img_labelling_controls.load_saved_boxes(self.image_label_file)
+        else:
+            # For FirstPass mode (no side_view), just display the image
+            self.image_label.setPixmap(self.orig_pixmap)
+            self.update_image()
 
     def update_image(self):
         if not hasattr(self, "orig_pixmap") or self.orig_pixmap.isNull():
@@ -159,9 +142,8 @@ class ImageView(QWidget):
             self.update_image()
 
 class FirstPass(QWidget):
-    def __init__(self, parents, controller):
+    def __init__(self, controller):
         super().__init__()
-        self.parents = parents
         self.controller = controller
 
         self.setWindowTitle("First Pass")
@@ -176,8 +158,8 @@ class FirstPass(QWidget):
             X Key       - Toggle auto skip to next Frame on Left/Right Key press(Default: True)
             C Key       - Hold to display these controls
 
-            Enter Key   - Display unmarked Frames / Confirm Selection(Opens dialog box before deletion)
-            Escape Key  - Open Menu: Cancel this Video's Import, Save for later and Exit
+            Enter Key   - Mark all remaining frames / Confirm Selection(Opens dialog box before deletion)
+            Escape Key  - Open Menu: Remove Frame's Entire Video, Save for later and Exit
             """
         )
 
@@ -189,7 +171,8 @@ class FirstPass(QWidget):
         self.menu_dialog.setLayout(self.menu_layout)
         self.menu_text = QLabel("First Pass Menu")
         self.cancel_vid_btn = QPushButton("Remove Video From Project")
-        self.save_later_btn = QPushButton("Save for later and Exit")
+        self.discard_quit_btn = QPushButton("Discard choices and Exit")
+        self.save_later_btn = QPushButton("Delete selected and Exit")
         self.cancel_vid_btn.clicked.connect(lambda _: self.cancel_this_video())
         self.save_later_btn.clicked.connect(lambda _: self.save_and_quit())
 
@@ -197,9 +180,22 @@ class FirstPass(QWidget):
         self.menu_layout.addWidget(self.cancel_vid_btn, alignment=(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter))
         self.menu_layout.addWidget(self.save_later_btn, alignment=(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter))
 
+        # Reuse imageview without the side view
+        self.image_view = ImageView(False, self.controller)
+
+        # UI
+        self.imgs_remaining_lbl = QLabel("Unmarked frames: 0")
+
         # Internal info
-        self.current_video_folder = ""
-        self.current_project = ""
+        self.current_project = Path(INSTALL_LOCATION)
+        self.current_video = Path(INSTALL_LOCATION)
+        self.all_input_imgs = []
+        self.unmarked_imgs = []
+        self.marked_del = []
+        self.marked_save = []
+        self.current_img_index = 0
+        self.auto_skip = True
+        self.needs_fp_file = Path(INSTALL_LOCATION)
 
     def keyPressEvent(self, event: QKeyEvent):
         if event.key() == Qt.Key.Key_Escape:
@@ -211,10 +207,39 @@ class FirstPass(QWidget):
         elif event.key() == Qt.Key.Key_Left:
             pass
 
-    def begin_pass(self, video, video_folder, prj_folder):
-        self.current_video_folder = video_folder
-        self.current_video = video # which is in video_folder / "{video_folder.stem}.mp4/mov/etc"
-        self.current_project = prj_folder # video_folder.parent.parent
+        elif event.key() == Qt.Key.Key_Enter:
+            if len(self.unmarked_imgs) > 0:
+                unmarked_str = "\n".join([str(frame.name) for frame in self.unmarked_imgs])
+                msg = QMessageBox(self)
+                msg.setWindowTitle("Notice")
+                msg.setText("The following frames have not been marked yet.")
+                msg.setInformativeText(
+                    "Please go back and mark them or choose from one of the following other options:"
+                )
+                msg.setDetailedText(unmarked_str)
+                msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+                delete_button = msg.addButton("Mark frames for Deletion", QMessageBox.ButtonRole.ActionRole)
+                save_button   = msg.addButton("Mark frames for Saving", QMessageBox.ButtonRole.ActionRole)
+                msg.setDefaultButton(QMessageBox.StandardButton.Ok)
+                msg.exec()
+
+                if msg.clickedButton() == delete_button:
+                    self.mark_all(self.unmarked_imgs, "delete")
+                elif msg.clickedButton() == save_button:
+                    self.mark_all(self.unmarked_imgs, "save")
+
+            else:
+                self.finish_and_delete()
+
+    def begin_pass(self, needs_fp, prj):
+        self.needs_fp_file = Path(prj) / "needs_first_pass.txt"
+        if len(needs_fp) == 0:
+            self.controller.switch_page(2)
+            return
+        self.all_input_imgs = needs_fp
+        self.unmarked_imgs = needs_fp
+        self.imgs_remaining_lbl.setText(f"Unmarked frames: {len(self.unmarked_imgs)}")
+        self.current_project = prj
 
         QMessageBox.information(
             self,
@@ -225,8 +250,53 @@ class FirstPass(QWidget):
             The controls are as follows:
 
             {self.controls_dialog.text()}
+
+            Pres the Escape Key for exit options, or press "Enter" when there are 0 unmarked frames remaining.
             """
         )
+
+        print(self.all_input_imgs[0])
+        self.image_view.view_image(Path(self.all_input_imgs[0]), self.current_project, self.all_input_imgs)
+
+    def mark_all(self, remaining_imgs, option):
+        if option == "delete":
+            self.marked_del.extend(remaining_imgs)
+        else:
+            self.marked_save.extend(remaining_imgs)
+        self.update_ui()
+
+    def mark_delete(self, img):
+        self.marked_del.append(img)
+        self.unmarked_imgs.remove(img)
+        try:
+            if len(self.unmarked_imgs) > 0 and self.auto_skip:
+                self.image_view.view_image(Path(self.all_input_imgs[self.current_img_index + 1]), self.current_project, self.all_input_imgs)
+        except IndexError:
+            pass
+        self.update_ui()            
+
+    def mark_save(self, img):
+        self.marked_save.append(img)
+        self.unmarked_imgs.remove(img)
+        try:
+            if len(self.unmarked_imgs) > 0 and self.auto_skip:
+                self.image_view.view_image(Path(self.all_input_imgs[self.current_img_index + 1]), self.current_project, self.all_input_imgs)
+        except IndexError:
+            pass
+        self.update_ui()
+
+    def next_img(self):
+        try:
+            self.image_view.view_image(Path(self.all_input_imgs[self.current_img_index + 1]), self.current_project, self.all_input_imgs)
+            self.update_ui()
+        except IndexError:
+            pass
+        self.update_ui()
+
+    def prev_img(self):
+        if self.current_img_index >= 1:
+            self.image_view.view_image(Path(self.all_input_imgs[self.current_img_index - 1]), self.current_project, self.all_input_imgs)
+        self.update_ui()
 
     def cancel_this_video(self):
         reply = QMessageBox.question(
@@ -237,10 +307,100 @@ class FirstPass(QWidget):
             QMessageBox.StandardButton.No
         )
         if reply == QMessageBox.StandardButton.Yes:
+            # Get all images from the current video
+            video_imgs = [img for img in self.all_input_imgs if img.parent == self.current_video]
+            
+            # Remove from all tracking lists
+            self.delete_frames(video_imgs)
+            
+            # Delete the video directory
+            try:
+                shutil.rmtree(self.current_video)
+            except OSError:
+                pass
+        
+        self.update_ui()
+
+    def discard_and_quit(self):
+        reply = QMessageBox.question(
+            self,
+            "Discard Changes and Quit",
+            f"Are you sure you want to exit without deleting? Your choices will be reset!",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        if reply == QMessageBox.StandardButton.Yes:
             pass
 
     def save_and_quit(self):
-        save_location = Path(self.current_project) / "first_pass_saves"
-        save_location.mkdir(parents=True, exist_ok=True)
+        reply = QMessageBox.question(
+            self,
+            "Delete and Quit",
+            f"Are you sure you want to remove these frames from the project? They will be gone forever unless the whole video is reuploaded.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self.delete_frames(self.marked_del)
 
-        
+    def update_ui(self):
+        self.current_video = self.all_input_imgs[self.current_img_index].parent
+        if len(self.unmarked_imgs) > 0:
+            self.imgs_remaining_lbl.setText(f"Unmarked frames: {len(self.unmarked_imgs)}")
+        else:
+            self.imgs_remaining_lbl.setText(f"All frames marked! Press Enter to confirm selection.")
+
+    def finish_and_delete(self):
+        reply = QMessageBox.question(
+            self,
+            "Delete and Finish",
+            f"Are you sure you want to remove the marked for deletion frames from the project? They will be gone forever unless the whole video is reuploaded.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self.delete_frames(self.marked_del)
+
+    def delete_frames(self, to_be_deleted):
+        for img in to_be_deleted:
+            if img in self.all_input_imgs:
+                self.all_input_imgs.remove(img)
+            if img in self.unmarked_imgs:
+                self.unmarked_imgs.remove(img)
+            if img in self.marked_del:
+                self.marked_del.remove(img)
+            if img in self.marked_save:
+                self.marked_save.remove(img)
+            if img in self.needs_fp_file.read_text().strip().splitlines():
+                # Remove from needs_first_pass.txt
+                lines = self.needs_fp_file.read_text().strip().splitlines()
+                lines.remove(str(img))
+                self.needs_fp_file.write_text("\n".join(lines))
+
+        # Navigate to next image or go back
+        if len(self.all_input_imgs) > 0:
+            self.current_img_index = 0
+            self.image_view.view_image(Path(self.all_input_imgs[0]), self.current_project, self.all_input_imgs)
+        else:
+            self.controller.switch_page(2)
+            self.controller.home.show_images()
+
+    # stop forced exit with warning
+    def closeEvent(self, event):
+        # update the needs_first_pass.txt file just in case
+        self.needs_fp_file.write_text("\n".join([str(img) for img in self.all_input_imgs]))
+
+        if len(self.marked_del) > 0 or len(self.marked_save) > 0:
+            reply = QMessageBox.question(
+                self,
+                "Exit First Pass",
+                f"You have marked frames for deletion or saving. Are you sure you want to exit? Your choices will be lost.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                event.accept()
+            else:
+                event.ignore()
+        else:
+            event.accept()
