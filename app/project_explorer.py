@@ -363,7 +363,7 @@ class ProjectExplorer(QMainWindow):
         if reply == QMessageBox.StandardButton.Yes:
             n = 1
             #prj_name = prj.stem.split('_')[-1]
-            prj_name = prj.name.rstrip('_').split('_')[-1] # who would end a directory name with an underscore? maybe even two? someone would...
+            prj_name = prj.name
             while prj_name in [p.stem for p in self.projects]:
                 n += 1
                 prj_name = f"{prj_name}_{n}"

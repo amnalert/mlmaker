@@ -46,7 +46,7 @@ class MusicHandler(QWidget):
         label_layout.addWidget(self.queue_info)
 
         self.player = QMediaPlayer(self)
-        self.audio_output = QAudioOutput()
+        self.audio_output = QAudioOutput(self)
 
         self.player.setAudioOutput(self.audio_output)
         self.audio_output.setVolume(volume)
@@ -60,8 +60,6 @@ class MusicHandler(QWidget):
         random.shuffle(self.queue)
         self.song_index = 0
         self.player.setSource(QUrl.fromLocalFile(str(self.queue[self.song_index])))
-        self.song_label.setText(f"Now playing: {Path(self.queue[self.song_index]).stem}")
-        self.next_song_label.setText(f"Next up: {Path(self.queue[self.song_index + 1]).stem}")
         self.queue_info.setText(f"Queue: {self.song_index + 1}/{len(self.queue)} Songs")
 
         self.player.mediaStatusChanged.connect(self.next_song)
@@ -72,6 +70,7 @@ class MusicHandler(QWidget):
         self.em_pause = False
 
         self.startup = True
+        self.reset_source()
 
     def loop(self):
         if self.looping == False:
@@ -101,7 +100,7 @@ class MusicHandler(QWidget):
                 #print("End of song.")
                 self.song_index += 1
                 self.reset_source()
-        elif status == QMediaPlayer.MediaStatus.LoadedMedia and self.em_pause == False:
+        elif (status == QMediaPlayer.MediaStatus.LoadedMedia and not self.em_pause):
             self.player.play()
 
     def skip_song(self):
@@ -120,45 +119,56 @@ class MusicHandler(QWidget):
         self.audio_output.setVolume(volume)
 
     def reset_source(self):
-        if self.song_index == 0:
-            self.prev_song_button.setEnabled(False)
-        else:
-            self.prev_song_button.setEnabled(True)
+        if not self.queue:
+            return
 
-        if self.song_index == len(self.queue) - 1:
-            self.next_song_label.setText(f"Songs will reshuffle after this song!")
-
-        elif self.song_index == (len(self.queue)):
-            #print("End of queue. Reshuffling songs.")
-            self.songs = [path for path in self.musicdir.iterdir() if path.is_file() and path.suffix.lower() in SONG_EXTS]
+        # Reached the end of the queue
+        if self.song_index >= len(self.queue):
+            self.songs = [
+                path
+                for path in self.musicdir.iterdir()
+                if path.is_file()
+                and path.suffix.lower() in SONG_EXTS
+            ]
 
             old_song = self.queue[-1]
 
             self.queue = self.songs.copy()
             random.shuffle(self.queue)
 
-            # dont immediately repeat the previous song
+            # Don't immediately repeat previous song
             while len(self.queue) > 1 and self.queue[0] == old_song:
                 random.shuffle(self.queue)
 
             self.song_index = 0
-            self.next_song_label.setText(f"Next up: {Path(self.queue[1]).stem}")
 
-        elif self.song_index < 0:
-            self.song_index = 0
+        self.song_index = max(0, min(self.song_index, len(self.queue) - 1))
+        self.prev_song_button.setEnabled(self.song_index > 0)
+        current_song = self.queue[self.song_index]
 
-        else:
-            self.next_song_label.setText(f"Next up: {Path(self.queue[self.song_index + 1]).stem}")
-
-        self.song_label.setText(f"Now playing: {Path(self.queue[self.song_index]).stem}")
-        self.queue_info.setText(f"Queue: {self.song_index + 1}/{len(self.queue)} Songs")
-
-        self.player.setSource(
-            QUrl.fromLocalFile(str(self.queue[self.song_index]))
+        self.song_label.setText(
+            f"Now playing: {Path(current_song).stem}"
         )
 
-        if not self.player.PlaybackState.PlayingState:
-            self.player.play()
+        self.queue_info.setText(
+            f"Queue: {self.song_index + 1}/{len(self.queue)} Songs"
+        )
+
+        # Next song
+        if self.song_index >= len(self.queue) - 1:
+            self.next_song_label.setText(
+                "Songs will reshuffle after this song!"
+            )
+        else:
+            next_song = self.queue[self.song_index + 1]
+            self.next_song_label.setText(
+                f"Next up: {Path(next_song).stem}"
+            )
+
+        # Change media source
+        self.player.setSource(
+            QUrl.fromLocalFile(str(current_song))
+        )
 
     def audio_dev_change(self):
         self.em_pause = True
@@ -190,3 +200,8 @@ class MusicHandler(QWidget):
         print("Source:", self.player.source().toString())
         print("Status:", self.player.mediaStatus())
         print("State:", self.player.playbackState())
+
+    def closeEvent(self, event):
+        self.player.stop()
+        self.player.setSource(QUrl())
+        event.accept()

@@ -54,14 +54,19 @@ class VideoConverter():
                 break
 
         # Move all folder to the project / image_uploads folder
-        shutil.move(str(save_location), str(Path(prj) / "image_uploads" / target_name))
+        video_final_folder = Path(prj) / "image_uploads" / target_name
+        shutil.move(str(save_location), str(video_final_folder))
+        frame_final_locations = [Path(p) for p in video_final_folder.iterdir()]
 
         print(f"[VideoConverter] done. kept={len(unique_frames)} duplicate_skips={duplicate_count}")
         cap.release()
         cv2.destroyAllWindows()
 
-        with open(fp_txt, "+a") as f:
-            for frame in unique_frames:
-                f.write(f"{frame}\n")
+        print(frame_final_locations[0:2])
 
-        return unique_frames
+        with open(fp_txt, "+a") as f:
+            for frame in frame_final_locations:
+                relative_frame = frame.relative_to(prj)
+                f.write(f"{Path(relative_frame)}\n")
+
+        return frame_final_locations

@@ -156,20 +156,21 @@ class ProjectWindow(QMainWindow):
         self.controller.switch_page(5)
 
     def load_saved_images(self, prj, user_folder, prj_uuid, needs_fp):
+        self.needs_fp.clear()
         self.user_folder = user_folder
         self.prj_folder = Path(self.user_folder / prj)
         self.current_project = prj
         self.uuid = prj_uuid
         self.needs_fp_file = Path(self.user_folder) / prj / "needs_first_pass.txt"
         self.needs_fp_file.touch(exist_ok=True)
-        # needs_fp_file has one image per line with the relative path being image_uploads/(video_name or singlet_images)/image_name.jpg
-        self.needs_fp.extend(self.needs_fp_file.read_text().strip().splitlines())
-        first_img = False
+        # needs_fp_file has absolute_path\n for each file
+        self.needs_fp = [Path(prj / p) for p in self.needs_fp_file.read_text().strip().splitlines()]
+        first_img = False 
         if len(self.needs_fp) > 0:
             # Show a folder icon in place of all the images
             first_img = self.folder_icon
             if len(needs_fp) > 0:
-                self.needs_fp.extend(needs_fp)
+                self.needs_fp.extend(Path(prj / img) for img in needs_fp)
 
         # Show images
         if self.prj_folder.exists() and self.prj_folder.is_dir():
@@ -215,10 +216,9 @@ class ProjectWindow(QMainWindow):
 
         # Actual size
         area_width = self.scroll_imgs.viewport().width()
-        area_height = self.scroll_imgs.viewport().height()
 
         thumb_width = area_width // columns
-        thumb_height = area_height // rows
+        thumb_height = thumb_width
 
         for index, img in enumerate(page_images):
             if not Path(img).is_file():

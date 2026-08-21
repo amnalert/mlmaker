@@ -189,8 +189,9 @@ class UploadImages(QPushButton):
         )
 
     def _handle_video_result(self, converted_frames):
-        self.needs_fp.extend(converted_frames)
-        self.images.extend(converted_frames)
+        frames = [Path(p) for p in converted_frames]
+        self.needs_fp.extend(frames)
+        self.images.extend(frames)
         self._video_processing = False
         self._video_thread = None
         self._video_worker = None

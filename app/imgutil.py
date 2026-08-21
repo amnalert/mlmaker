@@ -1,5 +1,5 @@
 from PySide6.QtWidgets import QApplication, QWidget, QGridLayout, QPushButton, QLabel, QLineEdit, QHBoxLayout, QLabel, QVBoxLayout, QSizePolicy, QInputDialog, QMessageBox, QStackedWidget, QScrollArea
-from PySide6.QtCore import QSize, Qt, QTimer, QPoint
+from PySide6.QtCore import QSize, Qt, QTimer, QPoint, QEvent
 from PySide6.QtGui import QPainter, QPixmap, QIcon, QFont, QKeyEvent
 from pathlib import Path
 import shutil
@@ -31,6 +31,8 @@ class ImageView(QWidget):
         ### Image stuff
 
         imglayout = QVBoxLayout()
+        belowimglayout = QHBoxLayout()
+        imglayout.addLayout(belowimglayout)
         imglayout.setContentsMargins(10, 10, 10, 10)
         main_layout.addLayout(imglayout)
 
@@ -62,21 +64,37 @@ class ImageView(QWidget):
         self.image_scroll_area.setMinimumSize(QSize(120, 120))
 
         imglayout.addWidget(self.image_scroll_area, stretch=1)
-        imglayout.addWidget(self.back_button)
-        imglayout.addWidget(self.img_index_lbl)
+        belowimglayout.addWidget(self.back_button, alignment=Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignLeft)
+        belowimglayout.addWidget(self.img_index_lbl, alignment=Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter)
 
-        # Always create labelling controls and UI widgets (for both side_view True and False)
-        self.img_labelling_controls = ImageLabellingControls(self, self.image_label)
+        # first pass
+        if not self.side_view:
+            # Show autoskip status
+            self.autoskip_lbl = QLabel("Autoskip: True")
+            belowimglayout.addWidget(self.autoskip_lbl, alignment=Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight)
 
-        self.image_name = self.img_labelling_controls.image_name
-        self.box_label_1 = self.img_labelling_controls.box_label_1
-        self.box_label_2 = self.img_labelling_controls.box_label_2
-        self.mouse_pos_label = self.img_labelling_controls.mouse_pos_label
-        self.scroll_boxes = self.img_labelling_controls.scroll_boxes
-        self.change_default_class_btn = self.img_labelling_controls.change_default_class_btn
-        self.show_all_boxes_btn = self.img_labelling_controls.show_all_boxes_btn
+            self.mark_status = QLabel()
+            self.mark_status.setFixedSize(25, 25)
+            self.mark_status.setStyleSheet(
+                "background-color: gray; border: 1px solid black;"
+            )
+            belowimglayout.addWidget(self.mark_status, alignment=Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight)
 
-        if self.side_view:
+            self.image_name = QLabel("parent/child.jpg")
+            main_layout.addWidget(self.image_name, alignment=Qt.AlignmentFlag.AlignRight)
+
+        # annotating
+        else:
+            self.img_labelling_controls = ImageLabellingControls(self, self.image_label)
+
+            self.image_name = self.img_labelling_controls.image_name
+            self.box_label_1 = self.img_labelling_controls.box_label_1
+            self.box_label_2 = self.img_labelling_controls.box_label_2
+            self.mouse_pos_label = self.img_labelling_controls.mouse_pos_label
+            self.scroll_boxes = self.img_labelling_controls.scroll_boxes
+            self.change_default_class_btn = self.img_labelling_controls.change_default_class_btn
+            self.show_all_boxes_btn = self.img_labelling_controls.show_all_boxes_btn
+
             ### Right-side UI - Only add to layout if side_view is True
             right_layout = QVBoxLayout()
             main_layout.addLayout(right_layout)
@@ -91,11 +109,24 @@ class ImageView(QWidget):
             right_layout.addWidget(self.show_all_boxes_btn, alignment=(Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter))
 
     def view_image(self, img, prj, img_list):
+        self.current_image = Path(img)
         self.images = img_list
-        self.img_index = img_list.index(img)
-        self.image_name.setText(f"{img.parent.name}/{img.name}")
-        self.orig_pixmap = QPixmap(str(img))
+        self.img_index = img_list.index(Path(self.current_image))
         self.project = prj
+
+        #print("\n--- VIEW IMAGE ---")
+        #print("current_image:", self.current_image)
+        #print("exists:", self.current_image.exists())
+        #print("is_file:", self.current_image.is_file())
+        #print("suffix:", self.current_image.suffix)
+
+        self.orig_pixmap = QPixmap(str(self.current_image))
+
+        #print("orig_pixmap:", self.orig_pixmap)
+        #print("isNull:", self.orig_pixmap.isNull())
+        #print("size:", self.orig_pixmap.size())
+
+        self.image_name.setText(f"{self.current_image.parent.name}/{self.current_image.name}")
 
         # Sync with img_labelling_controls
         if self.side_view:
@@ -109,21 +140,23 @@ class ImageView(QWidget):
             self.image_label_file = label_folder / f"{img.stem}.txt"
             self.image_label_file.parent.mkdir(parents=True, exist_ok=True)
             self.image_label_file.touch()
-            self.img_index_lbl.setText(f"Image: {self.img_index + 1}/{len(self.images)}")
-            self.image_label.setPixmap(self.orig_pixmap)
-            self.update_image()
+
+        self.img_index_lbl.setText(f"Image: {self.img_index + 1}/{len(self.images)}")
+        self.image_label.setPixmap(self.orig_pixmap)
+
+        if self.side_view:
             self.img_labelling_controls.load_saved_boxes(self.image_label_file)
-        else:
-            # For FirstPass mode (no side_view), just display the image
-            self.image_label.setPixmap(self.orig_pixmap)
-            self.update_image()
+
+        QTimer.singleShot(100, self.update_image)  # Update image after the widget is shown   
 
     def update_image(self):
         if not hasattr(self, "orig_pixmap") or self.orig_pixmap.isNull():
+            print("No valid pixmap")
             return
 
         available_size = self.image_scroll_area.viewport().size()
         if available_size.width() <= 0 or available_size.height() <= 0:
+            QTimer.singleShot(50, self.update_image) # retry
             return
 
         pixmap = self.orig_pixmap.scaled(
@@ -141,17 +174,36 @@ class ImageView(QWidget):
         if hasattr(self, "orig_pixmap"):
             self.update_image()
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(0, self.update_image)  # Update image after the widget is shown
+
+    def set_mark_status(self, status):
+        if status == "delete":
+            self.mark_status.setStyleSheet(
+                "background-color: red; border: 1px solid black;"
+            )
+        elif status == "save":
+            self.mark_status.setStyleSheet(
+                "background-color: green; border: 1px solid black;"
+            )
+        else:
+            self.mark_status.setStyleSheet(
+                "background-color: gray; border: 1px solid black;"
+            )
+
 class FirstPass(QWidget):
     def __init__(self, controller):
         super().__init__()
         self.controller = controller
 
         self.setWindowTitle("First Pass")
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         self.controls_dialog = QLabel(
             """
-            Left Key    - Mark to delete
-            Right Key   - Mark to save
+            Comma(,)    - Mark to delete
+            Period(.)   - Mark to save
             Spacebar    - Next Frame / Skip
             Shift Key   - Previous Frame / Back
 
@@ -180,8 +232,14 @@ class FirstPass(QWidget):
         self.menu_layout.addWidget(self.cancel_vid_btn, alignment=(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter))
         self.menu_layout.addWidget(self.save_later_btn, alignment=(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter))
 
+        # dont show the menu until the menu button is pressed(Esc)
+        self.menu_dialog.hide()
+
         # Reuse imageview without the side view
         self.image_view = ImageView(False, self.controller)
+        self.main_layout = QVBoxLayout(self)
+        self.main_layout.addWidget(self.image_view, stretch=1)
+        self.setLayout(self.main_layout)
 
         # UI
         self.imgs_remaining_lbl = QLabel("Unmarked frames: 0")
@@ -198,14 +256,25 @@ class FirstPass(QWidget):
         self.needs_fp_file = Path(INSTALL_LOCATION)
 
     def keyPressEvent(self, event: QKeyEvent):
+        print(f"Key pressed: {event.text()}")
         if event.key() == Qt.Key.Key_Escape:
             self.menu_dialog.show()
 
-        elif event.key() == Qt.Key.Key_Right:
-            pass
+        elif event.key() == Qt.Key.Key_Period:
+            self.mark_save(self.current_img_index)
 
-        elif event.key() == Qt.Key.Key_Left:
-            pass
+        elif event.key() == Qt.Key.Key_Comma:
+            self.mark_delete(self.current_img_index)
+
+        elif event.key() == Qt.Key.Key_Space:
+            self.next_img()
+        
+        elif event.key() == Qt.Key.Key_Shift:
+            self.prev_img()
+
+        elif event.key() == Qt.Key.Key_X:
+            self.auto_skip = not self.auto_skip
+            self.image_view.autoskip_lbl.setText(f"Autoskip: {self.auto_skip}")
 
         elif event.key() == Qt.Key.Key_Enter:
             if len(self.unmarked_imgs) > 0:
@@ -232,6 +301,8 @@ class FirstPass(QWidget):
                 self.finish_and_delete()
 
     def begin_pass(self, needs_fp, prj):
+        self.setFocus()
+        self.activateWindow()
         self.needs_fp_file = Path(prj) / "needs_first_pass.txt"
         if len(needs_fp) == 0:
             self.controller.switch_page(2)
@@ -255,8 +326,9 @@ class FirstPass(QWidget):
             """
         )
 
-        print(self.all_input_imgs[0])
-        self.image_view.view_image(Path(self.all_input_imgs[0]), self.current_project, self.all_input_imgs)
+        print(f"all_input_imgs: {self.all_input_imgs[0:3]}")
+
+        self.show_img(0)
 
     def mark_all(self, remaining_imgs, option):
         if option == "delete":
@@ -265,37 +337,56 @@ class FirstPass(QWidget):
             self.marked_save.extend(remaining_imgs)
         self.update_ui()
 
-    def mark_delete(self, img):
-        self.marked_del.append(img)
-        self.unmarked_imgs.remove(img)
-        try:
-            if len(self.unmarked_imgs) > 0 and self.auto_skip:
-                self.image_view.view_image(Path(self.all_input_imgs[self.current_img_index + 1]), self.current_project, self.all_input_imgs)
-        except IndexError:
-            pass
+    def mark_delete(self, img_idx):
+        img = self.all_input_imgs[img_idx]
+        print("mark_delete: ", img)
+        if img in self.marked_save:
+            self.marked_save.remove(img)
+        if img not in self.marked_del:
+            self.marked_del.append(img)
+        if img in self.unmarked_imgs:
+            self.unmarked_imgs.remove(img)
+
+        if len(self.unmarked_imgs) > 0 and self.auto_skip:
+            self.show_img(self.current_img_index + 1)
+
         self.update_ui()            
 
-    def mark_save(self, img):
-        self.marked_save.append(img)
-        self.unmarked_imgs.remove(img)
-        try:
-            if len(self.unmarked_imgs) > 0 and self.auto_skip:
-                self.image_view.view_image(Path(self.all_input_imgs[self.current_img_index + 1]), self.current_project, self.all_input_imgs)
-        except IndexError:
-            pass
+    def mark_save(self, img_idx):
+        img = self.all_input_imgs[img_idx]
+        if img in self.marked_del:
+            self.marked_del.remove(img)
+        if img not in self.marked_del:
+            self.marked_save.append(img)
+        if img in self.unmarked_imgs:
+            self.unmarked_imgs.remove(img)
+
+        self.image_view.set_mark_status("save")
+
+        if len(self.unmarked_imgs) > 0 and self.auto_skip and self.current_img_index < len(self.all_input_imgs) - 1:
+            self.show_img(self.current_img_index + 1)
         self.update_ui()
+    
+    def show_img(self, index):
+        self.current_img_index = index
+        img = self.all_input_imgs[index]
+        self.image_view.view_image(img, self.current_project, self.all_input_imgs)
+
+        if img in self.marked_del:
+            self.image_view.set_mark_status("delete")
+        elif img in self.marked_save:
+            self.image_view.set_mark_status("save")
+        else:
+            self.image_view.set_mark_status(None)
 
     def next_img(self):
-        try:
-            self.image_view.view_image(Path(self.all_input_imgs[self.current_img_index + 1]), self.current_project, self.all_input_imgs)
-            self.update_ui()
-        except IndexError:
-            pass
+        if self.current_img_index < len(self.all_input_imgs) - 1:
+            self.show_img(self.current_img_index + 1)
         self.update_ui()
 
     def prev_img(self):
         if self.current_img_index >= 1:
-            self.image_view.view_image(Path(self.all_input_imgs[self.current_img_index - 1]), self.current_project, self.all_input_imgs)
+            self.show_img(self.current_img_index - 1)
         self.update_ui()
 
     def cancel_this_video(self):
@@ -380,7 +471,7 @@ class FirstPass(QWidget):
         # Navigate to next image or go back
         if len(self.all_input_imgs) > 0:
             self.current_img_index = 0
-            self.image_view.view_image(Path(self.all_input_imgs[0]), self.current_project, self.all_input_imgs)
+            self.show_img(0)
         else:
             self.controller.switch_page(2)
             self.controller.home.show_images()
@@ -388,6 +479,7 @@ class FirstPass(QWidget):
     # stop forced exit with warning
     def closeEvent(self, event):
         # update the needs_first_pass.txt file just in case
+        image_upload_folder = self.current_project / "image_uploads" 
         self.needs_fp_file.write_text("\n".join([str(img) for img in self.all_input_imgs]))
 
         if len(self.marked_del) > 0 or len(self.marked_save) > 0:
