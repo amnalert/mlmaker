@@ -85,7 +85,7 @@ class LoginWindow(QWidget):
             # UUID
             self.user_folder = Path(INSTALL_LOCATION / "users" / self.user_input.text())
             self.user_folder.mkdir(parents=True, exist_ok=True)
-            uuids_file = (self.user_folder / "project_uuids.json")
+            uuids_file = (self.user_folder / "_projectdata.json")
             uuids_file.touch(exist_ok=True)
 
             # Move data and switch page

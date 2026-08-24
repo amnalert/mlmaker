@@ -59,7 +59,7 @@ class MainController(QMainWindow):
         self.login_page = LoginWindow(self)
         self.create_account_page = NewAccountWindow(self)
         self.home = ProjectWindow(self)
-        self.image_viewer = ImageView(True, self)
+        self.image_viewer = ImageView(True, self, self)
         self.proj_explorer = ProjectExplorer(self)
         self.network_page = NetworkExplorer(self)
         self.first_pass_page = FirstPass(self)

@@ -216,6 +216,10 @@ class ProjectExplorer(QMainWindow):
                         # manual JSON tampering while program running?
                         print("This block of code should not run unless the JSON is messed with manually while the program is running. Please contact me on GitHub if you see this message and were not tampering with the JSON.")
                         print("The application will now close.")
+
+                        # Instances where this block ran:
+                        # - I originally had the project uuid file name be project_uuids.json, but changed that to _projectdata.json, which caused the existing project uuid to not be the same as the one in the file. the if statement just before this one checks the other UUID file and doesnt pass, meaning this ran instead.
+
                         QApplication.quit()
                         return
 
@@ -347,7 +351,7 @@ class ProjectExplorer(QMainWindow):
 
         self.controller.switch_page(2)
         self.controller.home.load_saved_images(
-            prj, self.user_folder, project_data["uuid"], []
+            prj, self.user_folder, project_data["uuid"]
         )
 
     def move_to_shared(self, prj, ptype):
@@ -372,14 +376,14 @@ class ProjectExplorer(QMainWindow):
                 reply = QMessageBox.question(
                     self,
                     "Duplicate Project Name",
-                    f"Are you sure you want to copy '{prj.stem}', which is the same name as an existing {ptype} project? It will be stored in '{self.username}/{"projects" if copytotype == "local" else "shared_projects"}/{prj_name}'",
+                    f"Are you sure you want to copy '{prj.stem}', which is the same name as an existing {ptype} project? It will be stored in '{self.username}/{'projects' if copytotype == 'local' else'shared_projects'}/{prj_name}'",
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                     QMessageBox.StandardButton.No
                 )
                 copy_allowed = reply == QMessageBox.StandardButton.Yes
             if copy_allowed:
                 folder = Path(INSTALL_LOCATION)
-                if copytotype == "shared": # backwards logic sob
+                if copytotype == "shared":
                     folder = self.network_prj_folder
                 else:
                     folder = self.prj_folder

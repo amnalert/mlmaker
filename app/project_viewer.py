@@ -1,19 +1,13 @@
 from PySide6.QtWidgets import QApplication, QGridLayout, QWidget, QPushButton, QMainWindow, QLabel, QLineEdit, QHBoxLayout, QLabel, QVBoxLayout, QSizePolicy, QInputDialog, QMessageBox, QStackedWidget, QScrollArea
-from PySide6.QtCore import QSize, Qt, QTimer
+from PySide6.QtCore import QSize, Qt, QDir, QDirIterator
 from PySide6.QtGui import QPixmap, QIcon, QFontMetrics, QCursor, QIntValidator, QFont
 import sys
 import json, uuid
 import math
 from pathlib import Path
 
-from login import LoginWindow, NewAccountWindow
-from util import AutoScalingLabel
 from dataloader import UploadImages, UploadLabels
-from imgutil import ImageView, FirstPass
-from audioutil import MusicHandler 
-from project_explorer import ProjectExplorer
 from tcp_manager import TCPManager
-from network_explorer import NetworkExplorer
 
 SAVED_USER_DATA = ""
 INSTALL_LOCATION = Path(__file__).resolve().parent.parent
@@ -155,7 +149,7 @@ class ProjectWindow(QMainWindow):
         self.controller.network_page.receive_data(self.username, self.prj_folder)
         self.controller.switch_page(5)
 
-    def load_saved_images(self, prj, user_folder, prj_uuid, needs_fp):
+    def load_saved_images(self, prj, user_folder, prj_uuid):
         self.needs_fp.clear()
         self.user_folder = user_folder
         self.prj_folder = Path(self.user_folder / prj)
@@ -165,12 +159,26 @@ class ProjectWindow(QMainWindow):
         self.needs_fp_file.touch(exist_ok=True)
         # needs_fp_file has absolute_path\n for each file
         self.needs_fp = [Path(prj / p) for p in self.needs_fp_file.read_text().strip().splitlines()]
+        uploads = self.prj_folder / "image_uploads"
+        uploaded_files = set()
+        iterator = QDirIterator(str(uploads), QDir.Filter.Files, QDirIterator.IteratorFlag.Subdirectories)
+        while iterator.hasNext():
+            iterator.next()
+            file_path_str = Path(iterator.filePath()).resolve().as_posix()
+            uploaded_files.add(file_path_str)
+
+        self.needs_fp = [
+            path for path in self.needs_fp if path.resolve().as_posix() in uploaded_files
+        ]
+        relative_paths = [
+            path.resolve().relative_to(self.prj_folder.resolve()) for path in self.needs_fp
+        ]
+        self.needs_fp_file.write_text("\n".join([str(img) for img in relative_paths]))
+
         first_img = False 
         if len(self.needs_fp) > 0:
             # Show a folder icon in place of all the images
             first_img = self.folder_icon
-            if len(needs_fp) > 0:
-                self.needs_fp.extend(Path(prj / img) for img in needs_fp)
 
         # Show images
         if self.prj_folder.exists() and self.prj_folder.is_dir():
@@ -212,7 +220,7 @@ class ProjectWindow(QMainWindow):
             return
         
         columns = math.ceil(math.sqrt(num_images))
-        rows = math.ceil(num_images / columns)
+        # rows = math.ceil(num_images / columns)
 
         # Actual size
         area_width = self.scroll_imgs.viewport().width()

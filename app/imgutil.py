@@ -1,4 +1,4 @@
-from PySide6.QtWidgets import QApplication, QWidget, QGridLayout, QPushButton, QLabel, QLineEdit, QHBoxLayout, QLabel, QVBoxLayout, QSizePolicy, QInputDialog, QMessageBox, QStackedWidget, QScrollArea
+from PySide6.QtWidgets import QApplication, QWidget, QGridLayout, QPushButton, QLabel, QLineEdit, QHBoxLayout, QLabel, QVBoxLayout, QSizePolicy, QMessageBox, QStackedWidget, QScrollArea
 from PySide6.QtCore import QSize, Qt, QTimer, QPoint, QEvent
 from PySide6.QtGui import QPainter, QPixmap, QIcon, QFont, QKeyEvent
 from pathlib import Path
@@ -9,9 +9,10 @@ from labelling_controls import ImageLabellingControls
 INSTALL_LOCATION = Path(__file__).resolve().parent.parent
 
 class ImageView(QWidget):
-    def __init__(self, side_view, controller):
+    def __init__(self, side_view, parents, controller):
         super().__init__()
         self.controller = controller
+        self.parents = parents
         self.side_view = side_view
 
         self.project = ""
@@ -39,11 +40,15 @@ class ImageView(QWidget):
         main_layout.addLayout(imglayout)
 
         # Back button
-        self.back_button = QPushButton("Back")
+        if self.side_view:
+            self.back_button = QPushButton("Back")
+            self.back_button.clicked.connect(lambda: self.controller.switch_page(2))
+            self.back_button.clicked.connect(lambda: self.controller.home.update_image_page)
+        else:
+            self.back_button = QPushButton("Menu")
+            self.back_button.clicked.connect(self.parents.menu_dialog.show)
         self.back_button.setFixedHeight(40)
         self.back_button.setFixedWidth(120)
-        self.back_button.clicked.connect(lambda: self.controller.switch_page(2))
-        self.back_button.clicked.connect(lambda: self.controller.home.update_image_page)
 
         # Image index
         self.img_index = 0
@@ -228,7 +233,7 @@ class FirstPass(QWidget):
         self.menu_dialog.hide()
 
         # Reuse imageview without the side view
-        self.image_view = ImageView(False, self.controller)
+        self.image_view = ImageView(False, self, self.controller)
         self.main_layout = QVBoxLayout(self)
         self.main_layout.addWidget(self.image_view, stretch=1)
         self.setLayout(self.main_layout)
@@ -500,7 +505,6 @@ class FirstPass(QWidget):
     # stop forced exit with warning
     def closeEvent(self, event):
         # update the needs_first_pass.txt file just in case
-        image_upload_folder = self.current_project / "image_uploads" 
         self.needs_fp_file.write_text("\n".join([str(img) for img in self.all_input_imgs]))
 
         if len(self.marked_del) > 0 or len(self.marked_save) > 0:
