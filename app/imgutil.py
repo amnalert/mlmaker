@@ -23,8 +23,10 @@ class ImageView(QWidget):
         main_layout = QHBoxLayout(self)
 
         # Fonts
+        self.pt32 = QFont()
         self.pt16 = QFont()
         self.pt8 = QFont()
+        self.pt32.setPointSize(32)
         self.pt16.setPointSize(16)
         self.pt8.setPointSize(8)
 
@@ -74,14 +76,14 @@ class ImageView(QWidget):
             belowimglayout.addWidget(self.autoskip_lbl, alignment=Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight)
 
             self.mark_status = QLabel()
-            self.mark_status.setFixedSize(25, 25)
+            self.mark_status.setFixedSize(50, 50)
             self.mark_status.setStyleSheet(
                 "background-color: gray; border: 1px solid black;"
             )
             belowimglayout.addWidget(self.mark_status, alignment=Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight)
 
             self.image_name = QLabel("parent/child.jpg")
-            main_layout.addWidget(self.image_name, alignment=Qt.AlignmentFlag.AlignRight)
+            belowimglayout.addWidget(self.image_name, alignment=Qt.AlignmentFlag.AlignRight)
 
         # annotating
         else:
@@ -114,17 +116,7 @@ class ImageView(QWidget):
         self.img_index = img_list.index(Path(self.current_image))
         self.project = prj
 
-        #print("\n--- VIEW IMAGE ---")
-        #print("current_image:", self.current_image)
-        #print("exists:", self.current_image.exists())
-        #print("is_file:", self.current_image.is_file())
-        #print("suffix:", self.current_image.suffix)
-
         self.orig_pixmap = QPixmap(str(self.current_image))
-
-        #print("orig_pixmap:", self.orig_pixmap)
-        #print("isNull:", self.orig_pixmap.isNull())
-        #print("size:", self.orig_pixmap.size())
 
         self.image_name.setText(f"{self.current_image.parent.name}/{self.current_image.name}")
 
@@ -142,12 +134,12 @@ class ImageView(QWidget):
             self.image_label_file.touch()
 
         self.img_index_lbl.setText(f"Image: {self.img_index + 1}/{len(self.images)}")
-        self.image_label.setPixmap(self.orig_pixmap)
+        self.image_label.clear()
 
         if self.side_view:
             self.img_labelling_controls.load_saved_boxes(self.image_label_file)
 
-        QTimer.singleShot(100, self.update_image)  # Update image after the widget is shown   
+        QTimer.singleShot(0, self.update_image)  # Update image after the widget is shown   
 
     def update_image(self):
         if not hasattr(self, "orig_pixmap") or self.orig_pixmap.isNull():
@@ -204,11 +196,11 @@ class FirstPass(QWidget):
             """
             Comma(,)    - Mark to delete
             Period(.)   - Mark to save
-            Spacebar    - Next Frame / Skip
-            Shift Key   - Previous Frame / Back
+            Z           - Previous Frame / Back
+            X           - Next Frame / Skip
 
-            X Key       - Toggle auto skip to next Frame on Left/Right Key press(Default: True)
-            C Key       - Hold to display these controls
+            C Key       - Toggle auto skip to next Frame on Left/Right Key press(Default: True)
+            V Key       - Show this information box again
 
             Enter Key   - Mark all remaining frames / Confirm Selection(Opens dialog box before deletion)
             Escape Key  - Open Menu: Remove Frame's Entire Video, Save for later and Exit
@@ -243,6 +235,7 @@ class FirstPass(QWidget):
 
         # UI
         self.imgs_remaining_lbl = QLabel("Unmarked frames: 0")
+        self.main_layout.addWidget(self.imgs_remaining_lbl, alignment=(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom))
 
         # Internal info
         self.current_project = Path(INSTALL_LOCATION)
@@ -256,7 +249,6 @@ class FirstPass(QWidget):
         self.needs_fp_file = Path(INSTALL_LOCATION)
 
     def keyPressEvent(self, event: QKeyEvent):
-        print(f"Key pressed: {event.text()}")
         if event.key() == Qt.Key.Key_Escape:
             self.menu_dialog.show()
 
@@ -266,17 +258,20 @@ class FirstPass(QWidget):
         elif event.key() == Qt.Key.Key_Comma:
             self.mark_delete(self.current_img_index)
 
-        elif event.key() == Qt.Key.Key_Space:
+        elif event.key() == Qt.Key.Key_X:
             self.next_img()
         
-        elif event.key() == Qt.Key.Key_Shift:
+        elif event.key() == Qt.Key.Key_Z:
             self.prev_img()
 
-        elif event.key() == Qt.Key.Key_X:
+        elif event.key() == Qt.Key.Key_C:
             self.auto_skip = not self.auto_skip
             self.image_view.autoskip_lbl.setText(f"Autoskip: {self.auto_skip}")
 
-        elif event.key() == Qt.Key.Key_Enter:
+        elif event.key() == Qt.Key.Key_V:
+            self.display_controls()
+
+        elif event.key() == Qt.Key.Key_Return:
             if len(self.unmarked_imgs) > 0:
                 unmarked_str = "\n".join([str(frame.name) for frame in self.unmarked_imgs])
                 msg = QMessageBox(self)
@@ -300,6 +295,20 @@ class FirstPass(QWidget):
             else:
                 self.finish_and_delete()
 
+    def display_controls(self):
+        QMessageBox.information(
+            self,
+            "How to do a First Pass",
+            f"""
+            After uploading a video, it converts itself to individual frames. It is useful to run a 'First Pass' by quickly going through all frames and selecting frames for deletion(e.g. if the frame has no objects in it).
+
+            The controls are as follows:
+            {self.controls_dialog.text()}
+
+            Press the Escape Key for exit options, or press "Enter" when there are 0 unmarked frames remaining.
+            """
+        )
+
     def begin_pass(self, needs_fp, prj):
         self.setFocus()
         self.activateWindow()
@@ -307,8 +316,8 @@ class FirstPass(QWidget):
         if len(needs_fp) == 0:
             self.controller.switch_page(2)
             return
-        self.all_input_imgs = needs_fp
-        self.unmarked_imgs = needs_fp
+        self.all_input_imgs = needs_fp.copy()
+        self.unmarked_imgs = needs_fp.copy()
         self.imgs_remaining_lbl.setText(f"Unmarked frames: {len(self.unmarked_imgs)}")
         self.current_project = prj
 
@@ -319,14 +328,11 @@ class FirstPass(QWidget):
             After uploading a video, it converts itself to individual frames. It is useful to run a 'First Pass' by quickly going through all frames and selecting frames for deletion(e.g. if the frame has no objects in it).
 
             The controls are as follows:
-
             {self.controls_dialog.text()}
 
-            Pres the Escape Key for exit options, or press "Enter" when there are 0 unmarked frames remaining.
+            Press the Escape Key for exit options, or press "Enter" when there are 0 unmarked frames remaining.
             """
         )
-
-        print(f"all_input_imgs: {self.all_input_imgs[0:3]}")
 
         self.show_img(0)
 
@@ -339,7 +345,6 @@ class FirstPass(QWidget):
 
     def mark_delete(self, img_idx):
         img = self.all_input_imgs[img_idx]
-        print("mark_delete: ", img)
         if img in self.marked_save:
             self.marked_save.remove(img)
         if img not in self.marked_del:
@@ -347,8 +352,10 @@ class FirstPass(QWidget):
         if img in self.unmarked_imgs:
             self.unmarked_imgs.remove(img)
 
-        if len(self.unmarked_imgs) > 0 and self.auto_skip:
+        if len(self.unmarked_imgs) > 0 and self.auto_skip and self.current_img_index < (len(self.all_input_imgs) - 1):
             self.show_img(self.current_img_index + 1)
+        else:
+            self.show_img(self.current_img_index)
 
         self.update_ui()            
 
@@ -356,21 +363,22 @@ class FirstPass(QWidget):
         img = self.all_input_imgs[img_idx]
         if img in self.marked_del:
             self.marked_del.remove(img)
-        if img not in self.marked_del:
+        if img not in self.marked_save:
             self.marked_save.append(img)
         if img in self.unmarked_imgs:
             self.unmarked_imgs.remove(img)
 
         self.image_view.set_mark_status("save")
 
-        if len(self.unmarked_imgs) > 0 and self.auto_skip and self.current_img_index < len(self.all_input_imgs) - 1:
+        if len(self.unmarked_imgs) > 0 and self.auto_skip and self.current_img_index < (len(self.all_input_imgs) - 1):
             self.show_img(self.current_img_index + 1)
+        else:
+            self.show_img(self.current_img_index)
         self.update_ui()
     
     def show_img(self, index):
         self.current_img_index = index
         img = self.all_input_imgs[index]
-        self.image_view.view_image(img, self.current_project, self.all_input_imgs)
 
         if img in self.marked_del:
             self.image_view.set_mark_status("delete")
@@ -379,8 +387,10 @@ class FirstPass(QWidget):
         else:
             self.image_view.set_mark_status(None)
 
+        self.image_view.view_image(img, self.current_project, self.all_input_imgs)
+
     def next_img(self):
-        if self.current_img_index < len(self.all_input_imgs) - 1:
+        if self.current_img_index < (len(self.all_input_imgs) - 1):
             self.show_img(self.current_img_index + 1)
         self.update_ui()
 
@@ -450,6 +460,16 @@ class FirstPass(QWidget):
             QMessageBox.StandardButton.No
         )
         if reply == QMessageBox.StandardButton.Yes:
+            # Remove marked_save frames from needs_first_pass.txt
+            lines = self.needs_fp_file.read_text().strip().splitlines()
+            for img in self.marked_save:
+                if img in self.all_input_imgs:
+                    self.all_input_imgs.remove(img)
+                if img in lines:
+                    lines.remove(str(img))
+                    self.needs_fp_file.write_text("\n".join(lines))
+
+            # Delete frames from project and remove from self lists
             self.delete_frames(self.marked_del)
 
     def delete_frames(self, to_be_deleted):
@@ -474,7 +494,8 @@ class FirstPass(QWidget):
             self.show_img(0)
         else:
             self.controller.switch_page(2)
-            self.controller.home.show_images()
+            self.controller.home.show_images(self.marked_save)
+            self.marked_save.clear()
 
     # stop forced exit with warning
     def closeEvent(self, event):
