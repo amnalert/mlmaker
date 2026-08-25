@@ -103,7 +103,6 @@ class ImageLabellingControls(QWidget):
             if self.parents.img_index >= 1:
                 self.parents.controller.home.inspect_img(self.parents.images[self.parents.img_index - 1])
 
-
     def mouseMoveEvent(self, event):
         self.mouse_pos = event.position().toPoint()
         self.update()

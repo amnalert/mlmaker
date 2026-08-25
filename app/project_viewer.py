@@ -149,10 +149,10 @@ class ProjectWindow(QMainWindow):
         self.controller.network_page.receive_data(self.username, self.prj_folder)
         self.controller.switch_page(5)
 
-    def load_saved_images(self, prj, user_folder, prj_uuid):
+    def load_saved_images(self, prj, username, prj_uuid):
         self.needs_fp.clear()
-        self.user_folder = user_folder
-        self.username = user_folder.stem
+        self.user_folder = Path(INSTALL_LOCATION / "users" / username)
+        self.username = username
         self.prj_folder = Path(self.user_folder / prj)
         self.current_project = prj
         self.uuid = prj_uuid
@@ -178,7 +178,7 @@ class ProjectWindow(QMainWindow):
 
         first_img = False 
         if len(self.needs_fp) > 0:
-            # Show a folder icon in place of all the images
+            # Show a folder icon in place of all the images in needs_fp
             first_img = self.folder_icon
 
         # Show images
@@ -252,7 +252,7 @@ class ProjectWindow(QMainWindow):
             if img == self.folder_icon:
                 img_btn.clicked.connect(lambda _: (self.controller.switch_page(6), self.controller.first_pass_page.begin_pass(self.needs_fp, self.current_project, self.user_folder, self.uuid)))
             elif img:
-                img_btn.clicked.connect(lambda image=img: self.inspect_img(image))
+                img_btn.clicked.connect(lambda _: self.inspect_img(img))
             self.scroll_layout.addWidget(img_btn, row, column)
 
         self.update_pagination_controls()
@@ -288,6 +288,7 @@ class ProjectWindow(QMainWindow):
             pass
 
     def inspect_img(self, image):
+        print("inspecting image ", image)
         image_list = self.images.copy()
         if image:
             self.controller.switch_page(3)

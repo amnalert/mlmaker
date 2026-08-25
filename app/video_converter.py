@@ -169,7 +169,7 @@ class VideoConverter2():
                 line = line.strip()
                 print(f"[FFMPEG] {line}")
 
-                if line.startswith("[FFMPEG] frame="):
+                if line.startswith("frame="):
                     try:
                         processed_frames = int(line.split("=", 1)[1])
                         if total_frames > 0:
@@ -177,7 +177,8 @@ class VideoConverter2():
                                 min(processed_frames, total_frames),
                                 total_frames
                             )
-                    except ValueError:
+                    except ValueError as e:
+                        print(f"[FFMPEG] error handling line: {e}")
                         pass
 
             return_code = process.wait()

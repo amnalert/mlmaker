@@ -425,14 +425,8 @@ class FirstPass(QWidget):
             video_imgs = [img for img in self.all_input_imgs if img.parent == self.current_video]
             
             # Remove from all tracking lists
-            self.delete_frames(video_imgs)
-            
-            # Delete the video directory
-            try:
-                shutil.rmtree(self.current_video)
-            except OSError:
-                pass
-        
+            self.delete_video(video_imgs)
+
         self.update_ui()
 
     def discard_and_quit(self):
@@ -462,7 +456,7 @@ class FirstPass(QWidget):
             QMessageBox.StandardButton.No
         )
         if reply == QMessageBox.StandardButton.Yes:
-            self.delete_frames(self.marked_del)
+            self.delete_frames()
             self.return_to_project()
 
     def finish_and_delete(self):
@@ -484,24 +478,44 @@ class FirstPass(QWidget):
             self.delete_frames()
             self.return_to_project()
 
+    def delete_video(self, video_frames):
+        lines = self.needs_fp_file.read_text().strip().splitlines()
+        video_paths = {
+            Path(img).resolve().relative_to(self.current_project.resolve()).as_posix()
+            for img in video_frames
+        }
+
+        lines = [
+            line for line in lines
+            if Path(line).as_posix() not in video_paths
+        ]
+        
+        # Delete the video directory
+        try:
+            shutil.rmtree(self.current_video)
+        except OSError:
+            pass
+
     def delete_frames(self):
         lines = self.needs_fp_file.read_text().strip().splitlines()
 
         marked = self.marked_del + self.marked_save
 
-        deleted_paths = {
+        marked_paths = {
             Path(img).resolve().relative_to(self.current_project.resolve()).as_posix()
             for img in marked
         }
 
         lines = [
             line for line in lines
-            if Path(line).as_posix() not in deleted_paths
+            if Path(line).as_posix() not in marked_paths
         ]
 
         self.needs_fp_file.write_text("\n".join(lines))
 
         for img in self.marked_del:
+            img.unlink(missing_ok=True)
+
             if img in self.all_input_imgs:
                 self.all_input_imgs.remove(img)
             if img in self.unmarked_imgs:
