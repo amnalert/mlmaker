@@ -142,6 +142,8 @@ class MainController(QMainWindow):
         else:
             self.username = ""
             self.user_folder = ""
+            self.proj_explorer.logout_clear()
+            self.home.logout_clear()
             self.switch_page(0)
 
 

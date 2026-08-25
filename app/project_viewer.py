@@ -21,7 +21,7 @@ class ProjectWindow(QMainWindow):
         ### INITIALIZE VARIABLES
 
         # User info
-        self.username = self.controller.username
+        self.username = ""
         self.folder_icon = Path(INSTALL_LOCATION) / "assets" / "app_pics" / "folder.png"
 
         # Images
@@ -152,6 +152,7 @@ class ProjectWindow(QMainWindow):
     def load_saved_images(self, prj, user_folder, prj_uuid):
         self.needs_fp.clear()
         self.user_folder = user_folder
+        self.username = user_folder.stem
         self.prj_folder = Path(self.user_folder / prj)
         self.current_project = prj
         self.uuid = prj_uuid
@@ -163,9 +164,9 @@ class ProjectWindow(QMainWindow):
         uploaded_files = set()
         iterator = QDirIterator(str(uploads), QDir.Filter.Files, QDirIterator.IteratorFlag.Subdirectories)
         while iterator.hasNext():
-            iterator.next()
             file_path_str = Path(iterator.filePath()).resolve().as_posix()
             uploaded_files.add(file_path_str)
+            iterator.next()
 
         self.needs_fp = [
             path for path in self.needs_fp if path.resolve().as_posix() in uploaded_files
@@ -249,8 +250,8 @@ class ProjectWindow(QMainWindow):
             img_btn.setIconSize(QSize(thumb_width - 10, thumb_height - 10))
 
             if img == self.folder_icon:
-                img_btn.clicked.connect(lambda _: (self.controller.switch_page(6), self.controller.first_pass_page.begin_pass(self.needs_fp, self.current_project)))
-            else:
+                img_btn.clicked.connect(lambda _: (self.controller.switch_page(6), self.controller.first_pass_page.begin_pass(self.needs_fp, self.current_project, self.user_folder, self.uuid)))
+            elif img:
                 img_btn.clicked.connect(lambda image=img: self.inspect_img(image))
             self.scroll_layout.addWidget(img_btn, row, column)
 
@@ -287,7 +288,7 @@ class ProjectWindow(QMainWindow):
             pass
 
     def inspect_img(self, image):
-        image_list = self.images
+        image_list = self.images.copy()
         if image:
             self.controller.switch_page(3)
             self.controller.image_viewer.view_image(image, self.prj_folder, image_list)
@@ -370,8 +371,7 @@ class ProjectWindow(QMainWindow):
         msg.setStandardButtons(QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel)
         delete_button = msg.addButton("Delete these files", QMessageBox.ButtonRole.ActionRole)
         msg.setDefaultButton(QMessageBox.StandardButton.Ok)
-
-        result = msg.exec()
+        msg.exec()
         if msg.clickedButton() == delete_button:
             for label in labels:
                 try:
@@ -407,3 +407,18 @@ class ProjectWindow(QMainWindow):
 
         if self.images:
             self.update_image_page()
+
+    def logout_clear(self):
+        self.clear_img_grid()
+
+        self.username = ""
+        self.user_folder = Path(INSTALL_LOCATION)
+        self.images.clear()
+        self.images_per_page = 20
+        self.current_page = 0
+        self.needs_fp.clear()
+        self.needs_fp_file = Path(INSTALL_LOCATION)
+        self.project_classes.clear()
+        self.labels_without_images.clear()
+        self.current_project = ""
+        self.uuid = ""

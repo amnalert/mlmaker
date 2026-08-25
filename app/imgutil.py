@@ -197,10 +197,15 @@ class FirstPass(QWidget):
         self.setWindowTitle("First Pass")
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
+        # Fonts
+        self.pt32b = QFont()
+        self.pt32b.setBold(True)
+        self.pt32b.setPointSize(32)
+
         self.controls_dialog = QLabel(
             """
-            Comma(,)    - Mark to delete
-            Period(.)   - Mark to save
+            Comma( , )  - Mark to delete
+            Period( . ) - Mark to save
             Z           - Previous Frame / Back
             X           - Next Frame / Skip
 
@@ -212,6 +217,19 @@ class FirstPass(QWidget):
             """
         )
 
+        self.ctrls = QMessageBox()
+        self.ctrls.setWindowTitle("How to do a First Pass")
+        self.ctrls.setText(f"""
+            After uploading a video, it converts itself to individual frames. It is useful to run a 'First Pass' by quickly going through all frames and selecting frames for deletion(e.g. if the frame has no objects in it).
+
+            The controls are as follows:
+            {self.controls_dialog.text()}
+
+            Press the Escape Key for exit options, or press "Enter" when there are 0 unmarked frames remaining.
+            """
+        )
+        self.ctrls.setStyleSheet("QLabel { min-width: 750px; min-height: 150px; }")
+
         self.menu_dialog = QWidget(self, Qt.WindowType.Dialog)
         screen = QApplication.primaryScreen().availableGeometry()
         self.menu_dialog.resize(int(screen.width() * 0.5), int(screen.height() * 0.5))
@@ -219,15 +237,21 @@ class FirstPass(QWidget):
         self.menu_layout = QVBoxLayout()
         self.menu_dialog.setLayout(self.menu_layout)
         self.menu_text = QLabel("First Pass Menu")
+        self.menu_text.setFont(self.pt32b)
         self.cancel_vid_btn = QPushButton("Remove Video From Project")
+        self.cancel_vid_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.discard_quit_btn = QPushButton("Discard choices and Exit")
+        self.discard_quit_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.save_later_btn = QPushButton("Delete selected and Exit")
+        self.save_later_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.cancel_vid_btn.clicked.connect(lambda _: self.cancel_this_video())
         self.save_later_btn.clicked.connect(lambda _: self.save_and_quit())
+        self.discard_quit_btn.clicked.connect(lambda _: self.discard_and_quit())
 
         self.menu_layout.addWidget(self.menu_text, alignment=(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter))
         self.menu_layout.addWidget(self.cancel_vid_btn, alignment=(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter))
         self.menu_layout.addWidget(self.save_later_btn, alignment=(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter))
+        self.menu_layout.addWidget(self.discard_quit_btn, alignment=(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter))
 
         # dont show the menu until the menu button is pressed(Esc)
         self.menu_dialog.hide()
@@ -245,6 +269,8 @@ class FirstPass(QWidget):
         # Internal info
         self.current_project = Path(INSTALL_LOCATION)
         self.current_video = Path(INSTALL_LOCATION)
+        self.current_uuid = ""
+        self.current_user = ""
         self.all_input_imgs = []
         self.unmarked_imgs = []
         self.marked_del = []
@@ -301,20 +327,12 @@ class FirstPass(QWidget):
                 self.finish_and_delete()
 
     def display_controls(self):
-        QMessageBox.information(
-            self,
-            "How to do a First Pass",
-            f"""
-            After uploading a video, it converts itself to individual frames. It is useful to run a 'First Pass' by quickly going through all frames and selecting frames for deletion(e.g. if the frame has no objects in it).
+        self.ctrls.exec()
 
-            The controls are as follows:
-            {self.controls_dialog.text()}
+    def begin_pass(self, needs_fp, prj, user, uuid):
+        self.current_user = user
+        self.current_uuid = uuid
 
-            Press the Escape Key for exit options, or press "Enter" when there are 0 unmarked frames remaining.
-            """
-        )
-
-    def begin_pass(self, needs_fp, prj):
         self.setFocus()
         self.activateWindow()
         self.needs_fp_file = Path(prj) / "needs_first_pass.txt"
@@ -326,18 +344,7 @@ class FirstPass(QWidget):
         self.imgs_remaining_lbl.setText(f"Unmarked frames: {len(self.unmarked_imgs)}")
         self.current_project = prj
 
-        QMessageBox.information(
-            self,
-            "How to do a First Pass",
-            f"""
-            After uploading a video, it converts itself to individual frames. It is useful to run a 'First Pass' by quickly going through all frames and selecting frames for deletion(e.g. if the frame has no objects in it).
-
-            The controls are as follows:
-            {self.controls_dialog.text()}
-
-            Press the Escape Key for exit options, or press "Enter" when there are 0 unmarked frames remaining.
-            """
-        )
+        self.ctrls.exec()
 
         self.show_img(0)
 
@@ -346,6 +353,7 @@ class FirstPass(QWidget):
             self.marked_del.extend(remaining_imgs)
         else:
             self.marked_save.extend(remaining_imgs)
+        self.unmarked_imgs.clear()
         self.update_ui()
 
     def mark_delete(self, img_idx):
@@ -408,7 +416,7 @@ class FirstPass(QWidget):
         reply = QMessageBox.question(
             self,
             "Remove Video from Project",
-            f"Are you sure you want to remove video '{self.current_video.name}' from the project, which will also remove all of its image Frames? All labels will be lost!",
+            f"Are you sure you want to remove video '{self.current_video.name}' from the project, which will also remove all of its image frames? Any labels existing for any of these frames will be lost!",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )
@@ -436,7 +444,14 @@ class FirstPass(QWidget):
             QMessageBox.StandardButton.No
         )
         if reply == QMessageBox.StandardButton.Yes:
-            pass
+            self.return_to_project()
+
+    def update_ui(self):
+        self.current_video = self.all_input_imgs[self.current_img_index].parent
+        if len(self.unmarked_imgs) > 0:
+            self.imgs_remaining_lbl.setText(f"Unmarked frames: {len(self.unmarked_imgs)}")
+        else:
+            self.imgs_remaining_lbl.setText(f"All frames marked! Press Enter to confirm selection.")
 
     def save_and_quit(self):
         reply = QMessageBox.question(
@@ -448,59 +463,66 @@ class FirstPass(QWidget):
         )
         if reply == QMessageBox.StandardButton.Yes:
             self.delete_frames(self.marked_del)
-
-    def update_ui(self):
-        self.current_video = self.all_input_imgs[self.current_img_index].parent
-        if len(self.unmarked_imgs) > 0:
-            self.imgs_remaining_lbl.setText(f"Unmarked frames: {len(self.unmarked_imgs)}")
-        else:
-            self.imgs_remaining_lbl.setText(f"All frames marked! Press Enter to confirm selection.")
+            self.return_to_project()
 
     def finish_and_delete(self):
-        reply = QMessageBox.question(
-            self,
-            "Delete and Finish",
-            f"Are you sure you want to remove the marked for deletion frames from the project? They will be gone forever unless the whole video is reuploaded.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
+        for_deletion_str = "\n".join([str(img) for img in self.marked_del])
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Delete and Finish")
+        msg.setText("Are you sure you want to remove the marked for deletion frames from the project?")
+        msg.setInformativeText(
+            "These images will be gone unless the video is reuploaded."
         )
+        msg.setDetailedText(for_deletion_str)
+        msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
+        msg.setDefaultButton(QMessageBox.StandardButton.Cancel)
+
+        reply = msg.exec()
+        
         if reply == QMessageBox.StandardButton.Yes:
-            # Remove marked_save frames from needs_first_pass.txt
-            lines = self.needs_fp_file.read_text().strip().splitlines()
-            for img in self.marked_save:
-                if img in self.all_input_imgs:
-                    self.all_input_imgs.remove(img)
-                if img in lines:
-                    lines.remove(str(img))
-                    self.needs_fp_file.write_text("\n".join(lines))
-
             # Delete frames from project and remove from self lists
-            self.delete_frames(self.marked_del)
+            self.delete_frames()
+            self.return_to_project()
 
-    def delete_frames(self, to_be_deleted):
-        for img in to_be_deleted:
+    def delete_frames(self):
+        lines = self.needs_fp_file.read_text().strip().splitlines()
+
+        marked = self.marked_del + self.marked_save
+
+        deleted_paths = {
+            Path(img).resolve().relative_to(self.current_project.resolve()).as_posix()
+            for img in marked
+        }
+
+        lines = [
+            line for line in lines
+            if Path(line).as_posix() not in deleted_paths
+        ]
+
+        self.needs_fp_file.write_text("\n".join(lines))
+
+        for img in self.marked_del:
             if img in self.all_input_imgs:
                 self.all_input_imgs.remove(img)
             if img in self.unmarked_imgs:
                 self.unmarked_imgs.remove(img)
-            if img in self.marked_del:
-                self.marked_del.remove(img)
             if img in self.marked_save:
                 self.marked_save.remove(img)
-            if img in self.needs_fp_file.read_text().strip().splitlines():
-                # Remove from needs_first_pass.txt
-                lines = self.needs_fp_file.read_text().strip().splitlines()
-                lines.remove(str(img))
-                self.needs_fp_file.write_text("\n".join(lines))
+        self.marked_del.clear()
 
-        # Navigate to next image or go back
-        if len(self.all_input_imgs) > 0:
-            self.current_img_index = 0
-            self.show_img(0)
-        else:
-            self.controller.switch_page(2)
-            self.controller.home.show_images(self.marked_save)
+    def return_to_project(self):
+        if self.all_input_imgs:
+            self.all_input_imgs.clear()
+        if self.unmarked_imgs:
+            self.unmarked_imgs.clear()
+        if self.marked_del:
+            self.marked_del.clear()
+        if self.marked_save:
             self.marked_save.clear()
+
+        self.controller.switch_page(2)
+        self.controller.home.load_saved_images(self.current_project, self.current_user, self.current_uuid)
+
 
     # stop forced exit with warning
     def closeEvent(self, event):

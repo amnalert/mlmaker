@@ -542,5 +542,22 @@ class ProjectExplorer(QMainWindow):
             if widget is not None:
                 widget.deleteLater()
 
+    def logout_clear(self):
+        self.clear_prjs()
+        self.prj_folder = Path(INSTALL_LOCATION)
+        self.username = ""
+        self.user_folder = Path(INSTALL_LOCATION)
+        self.projects.clear()
+        self.network_prj_folder = Path(INSTALL_LOCATION)
+        self.prj_names.clear()
+        self.prj_uuids.clear()
+        self.local_prjs.clear()
+        self.network_prjs.clear()
+        self.current_user_location = "local"
+        self.pjs_per_page = 20
+        self.current_page = 0
+
+        self.show_user.setText("")
+
     def resizeEvent(self, event):
         super().resizeEvent(event)

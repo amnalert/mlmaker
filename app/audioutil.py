@@ -1,6 +1,6 @@
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaDevices
-from PySide6.QtCore import QUrl, Qt, Slot
-from PySide6.QtWidgets import QWidget, QPushButton, QHBoxLayout, QLabel, QVBoxLayout
+from PySide6.QtCore import QUrl, Qt
+from PySide6.QtWidgets import QWidget, QPushButton, QHBoxLayout, QLabel, QVBoxLayout, QSlider
 import random
 import time
 from pathlib import Path
@@ -24,19 +24,26 @@ class MusicHandler(QWidget):
         self.musicdir = musicdir
         self.looping = False
 
-        self.play_button = QPushButton("Play/Pause")
+        self.play_button = QPushButton("Play")
         self.skip_button = QPushButton("Skip Song")
         self.prev_song_button = QPushButton("Previous Song")
         self.prev_song_button.setEnabled(False)
         self.loop_button = QPushButton("Loop: False")
-        self.play_button.clicked.connect(lambda: self.play_or_pause())
-        self.skip_button.clicked.connect(lambda: self.skip_song())
-        self.prev_song_button.clicked.connect(lambda: self.prev_song())
-        self.loop_button.clicked.connect(lambda: self.loop())
+        self.volume_slider = QSlider(Qt.Orientation.Horizontal)
+        self.volume_slider.setRange(0, 100)
+        self.volume_slider.setValue(25)
+        self.volume_label = QLabel("Volume: 25")
+        self.play_button.clicked.connect(self.play_or_pause)
+        self.skip_button.clicked.connect(self.skip_song)
+        self.prev_song_button.clicked.connect(self.prev_song)
+        self.loop_button.clicked.connect(self.loop)
+        self.volume_slider.valueChanged.connect(self.change_volume)
         button_layout.addWidget(self.play_button)
         button_layout.addWidget(self.skip_button)
         button_layout.addWidget(self.prev_song_button)
         button_layout.addWidget(self.loop_button)
+        button_layout.addWidget(self.volume_slider)
+        button_layout.addWidget(self.volume_label)
 
         self.song_label = QLabel("Now playing:")
         self.next_song_label = QLabel("Up next:")
@@ -70,7 +77,7 @@ class MusicHandler(QWidget):
         self.em_pause = False
 
         self.startup = True
-        self.reset_source()
+        self.reset_source()        
 
     def loop(self):
         if self.looping == False:
@@ -79,29 +86,37 @@ class MusicHandler(QWidget):
             self.looping = False
         self.loop_button.setText(f"Loop: {str(self.looping)}")
 
+    def change_volume(self, value):
+        self.volume = value
+        self.volume_label.setText(f"Volume: {value}")
+        self.audio_output.setVolume(value / 100.0)
+
     def play_or_pause(self):
         self.em_pause = False
         if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            self.play_button.setText("Paused")
             self.player.pause()
             #print("Pausing")
         else:
+            self.play_button.setText("Play")
             self.player.play()
             #print("Playing")
 
     def next_song(self, status):
         #print(status)
-        if self.startup == True:
+        if self.startup:
             self.startup = False
             return
         if status == QMediaPlayer.MediaStatus.EndOfMedia:
-            if self.looping == True:
+            if self.looping:
                 self.player.setPosition(0)
             else:
                 #print("End of song.")
                 self.song_index += 1
                 self.reset_source()
-        elif (status == QMediaPlayer.MediaStatus.LoadedMedia and not self.em_pause):
-            self.player.play()
+        elif status == QMediaPlayer.MediaStatus.LoadedMedia:
+            if not self.em_pause:
+                self.player.play()
 
     def skip_song(self):
         self.song_index += 1
@@ -130,6 +145,9 @@ class MusicHandler(QWidget):
                 if path.is_file()
                 and path.suffix.lower() in SONG_EXTS
             ]
+
+            if not self.songs:
+                return
 
             old_song = self.queue[-1]
 
@@ -166,6 +184,7 @@ class MusicHandler(QWidget):
             )
 
         # Change media source
+        self.player.stop()
         self.player.setSource(
             QUrl.fromLocalFile(str(current_song))
         )
@@ -202,6 +221,11 @@ class MusicHandler(QWidget):
         print("State:", self.player.playbackState())
 
     def closeEvent(self, event):
+        print("MusicHandler close event")
+
         self.player.stop()
         self.player.setSource(QUrl())
         event.accept()
+
+    def __del__(self):
+        print("MusicHandler Python object destroyed")

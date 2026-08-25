@@ -153,12 +153,13 @@ class VideoConverter2():
             process = subprocess.Popen(
                 ffmpeg_cmd,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
+                stderr=subprocess.DEVNULL,
+                text=True,
+                bufsize=1
             )
 
-            if process.stderr is None or process.stdout is None:
-                print("[VideoConverter] ERROR: Could not access FFmpeg stderr or stdout")
+            if process.stdout is None:
+                print("[VideoConverter] ERROR: Could not access FFmpeg stdout")
                 process.kill()
                 return []
             
@@ -166,7 +167,9 @@ class VideoConverter2():
 
             for line in process.stdout:
                 line = line.strip()
-                if line.startswith("frame="):
+                print(f"[FFMPEG] {line}")
+
+                if line.startswith("[FFMPEG] frame="):
                     try:
                         processed_frames = int(line.split("=", 1)[1])
                         if total_frames > 0:
@@ -177,12 +180,10 @@ class VideoConverter2():
                     except ValueError:
                         pass
 
-            stderr_output = process.stderr.read()
             return_code = process.wait()
 
             if return_code != 0:
-                print("[VideoConverter] FFmpeg stderr:")
-                print(stderr_output)
+                print("[VideoConverter] FFmpeg error.")
 
         except FileNotFoundError:
             print(

@@ -161,7 +161,7 @@ class UploadImages(QPushButton):
         dest_fpath = f"{resolved_name}{video_path.suffix}"
         dest_path.mkdir(exist_ok=True)
         try:
-            shutil.move(video_path, dest_path / dest_fpath)
+            shutil.copy2(video_path, dest_path / dest_fpath)
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to rename video: {str(e)}")
             dest_path = video_path
@@ -192,6 +192,7 @@ class UploadImages(QPushButton):
         self._video_worker.finished.connect(self._video_worker.deleteLater)
         self._video_worker.failed.connect(self._video_worker.deleteLater)
         self._video_thread.finished.connect(self._video_thread.deleteLater)
+        self._video_thread.finished.connect(self._video_thread_finished)
 
         self._video_thread.start()
 
@@ -205,8 +206,6 @@ class UploadImages(QPushButton):
         frames = [Path(p) for p in converted_frames]
         self.images.extend(frames)
         self._video_processing = False
-        self._video_thread = None
-        self._video_worker = None
 
         if video in Path(self.image_uploads).iterdir():
             shutil.move(video, (self.image_uploads / video.stem))
@@ -218,6 +217,10 @@ class UploadImages(QPushButton):
             self.setText(self._default_text)
             self.setEnabled(True)
             QTimer.singleShot(0, lambda: self.parent_widget.load_saved_images(self.project, self.parent_widget.username, self.project_uuid))
+
+    def _video_thread_finished(self):
+        self._video_thread = None
+        self._video_worker = None
 
     def _handle_video_error(self, exc):
         self._video_processing = False
