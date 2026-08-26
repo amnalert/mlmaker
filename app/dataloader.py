@@ -5,7 +5,7 @@ from pathlib import Path
 import shutil
 import tempfile
 
-from video_converter import VideoConverter, VideoConverter2
+from video_converter import VideoConverterOpenCV, VideoConverterFFMPEG
 
 class VideoConvertWorker(QObject):
     finished = Signal(object, object)
@@ -20,8 +20,27 @@ class VideoConvertWorker(QObject):
         self.frame_keep = frame_keep_percentage
 
     def run(self):
+        # Check dependencies for either ffmpeg or opencv
+        converter_type = "ffmpeg"
         try:
-            converter = VideoConverter2(self)
+            import ffmpeg
+            converter_type = "ffmpeg"
+        except ImportError as e:
+            print(f"Import Error: ffmpeg is not installed in this environment. ({str(e)})")
+            try:
+                import cv2
+                converter_type = "cv2"
+            except ImportError as e:
+                print(f"Import Error: OpenCV is not installed in this environment. ({str(e)})")
+                self.failed.emit("import_fail")
+                return
+
+        if converter_type == "ffmpeg":
+            converter = VideoConverterFFMPEG(self)
+        else:
+            converter = VideoConverterOpenCV(self)
+
+        try:
             converted_frames = converter.convert_mp4(self.video_path, self.project_path, self.frame_keep, self.output_name)
             label_folder = Path(self.project_path) / "image_labels" / Path(self.output_name)
             label_folder.mkdir(parents=True, exist_ok=True)
@@ -223,6 +242,13 @@ class UploadImages(QPushButton):
         self._video_worker = None
 
     def _handle_video_error(self, exc):
+        if exc == "import_fail":
+            QMessageBox.critical(
+                self,
+                "Video conversion failed",
+                "At least one of the following packages are required for video conversion: ffmpeg-python (recommended), opencv-python (resource intensive). Please add them to your environment.",
+            )
+
         self._video_processing = False
         self._video_thread = None
         self._video_worker = None

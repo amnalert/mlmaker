@@ -37,7 +37,7 @@ class ImageView(QWidget):
         belowimglayout = QHBoxLayout()
         imglayout.addLayout(belowimglayout)
         imglayout.setContentsMargins(10, 10, 10, 10)
-        main_layout.addLayout(imglayout)
+        main_layout.addLayout(imglayout, 5)
 
         # Back button
         if self.side_view:
@@ -104,7 +104,7 @@ class ImageView(QWidget):
 
             ### Right-side UI - Only add to layout if side_view is True
             right_layout = QVBoxLayout()
-            main_layout.addLayout(right_layout)
+            main_layout.addLayout(right_layout, 1)
 
                 # Add to layout
             right_layout.addWidget(self.image_name, alignment=(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter))
