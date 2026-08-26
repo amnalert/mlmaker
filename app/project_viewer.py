@@ -1,8 +1,6 @@
-from PySide6.QtWidgets import QApplication, QGridLayout, QWidget, QPushButton, QMainWindow, QLabel, QLineEdit, QHBoxLayout, QLabel, QVBoxLayout, QSizePolicy, QInputDialog, QMessageBox, QStackedWidget, QScrollArea
+from PySide6.QtWidgets import QApplication, QGridLayout, QWidget, QPushButton, QMainWindow, QLabel, QLineEdit, QHBoxLayout, QLabel, QVBoxLayout, QInputDialog, QMessageBox, QScrollArea
 from PySide6.QtCore import QSize, Qt, QDir, QDirIterator
-from PySide6.QtGui import QPixmap, QIcon, QFontMetrics, QCursor, QIntValidator, QFont
-import sys
-import json, uuid
+from PySide6.QtGui import QPixmap, QIcon, QCursor, QIntValidator, QFont
 import math
 from pathlib import Path
 
@@ -26,7 +24,7 @@ class ProjectWindow(QMainWindow):
 
         # Images
         self.images = []
-        self.images_per_page = 20
+        self.images_per_page = 16
         self.current_page = 0
         self.needs_fp = []
         self.needs_fp_file = Path(INSTALL_LOCATION)
@@ -121,7 +119,7 @@ class ProjectWindow(QMainWindow):
 
         self.image_count_label = QLabel("Images per page:")
         self.image_count_input = QLineEdit()
-        self.image_count_input.setText("20")
+        self.image_count_input.setText("16")
         self.image_count_input.setFixedWidth(50)
         self.image_count_input.setValidator(QIntValidator(1, 100))
         self.image_count_input.returnPressed.connect(self.change_images_per_page)
@@ -224,20 +222,63 @@ class ProjectWindow(QMainWindow):
         # rows = math.ceil(num_images / columns)
 
         # Actual size
-        area_width = self.scroll_imgs.viewport().width()
+        area_width = self.scroll_imgs.viewport().width() - 10
 
         thumb_width = area_width // columns
-        thumb_height = thumb_width
+        thumb_height = thumb_width        
+
+        row_heights = {}
 
         for index, img in enumerate(page_images):
             if not Path(img).is_file():
                 continue
 
             row = index // columns
+
+            pixmap = QPixmap(str(img))
+            scaled = pixmap.scaled(
+                thumb_width - 10,
+                thumb_height - 10,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation
+            )
+
+            row_heights[row] = max(
+                row_heights.get(row, 0),
+                scaled.height()
+            )
+
+        for index, img in enumerate(page_images):
+            if not Path(img).is_file():
+                continue
+
+            # Get # labels(rows in label file)
+            label_count = 0
+            with open(Path(self.current_project) / "image_labels" / f"{img.parent.stem}" / f"{img.stem}.txt", "r") as f:
+                label_count = sum(1 for line in f)
+
+            row = index // columns
             column = index % columns
 
-            img_btn = QPushButton(self.scroll_content)
+            img_widget = QWidget(self.scroll_content)
+            img_h = QHBoxLayout()
+            img_h.setContentsMargins(0, 0, 0, 0)
+            img_v = QVBoxLayout()
+            img_v.setContentsMargins(0, 0, 0, 0)
+            img_v.setSpacing(2)
+
+            box_info = QLabel(f"Labels: {label_count}")
+            del_btn = QPushButton("Delete")
+            img_h.addWidget(box_info)
+            img_h.addWidget(del_btn)
+
+            img_v.addLayout(img_h)
+
+            img_btn = QPushButton()
             img_btn.setFixedSize(thumb_width, thumb_height)
+            img_v.addWidget(img_btn)
+
+            img_widget.setLayout(img_v)
 
             thumb = QPixmap(str(img)).scaled(
                 thumb_width - 10,
@@ -252,8 +293,8 @@ class ProjectWindow(QMainWindow):
             if img == self.folder_icon:
                 img_btn.clicked.connect(lambda _: (self.controller.switch_page(6), self.controller.first_pass_page.begin_pass(self.needs_fp, self.current_project, self.user_folder, self.uuid)))
             elif img:
-                img_btn.clicked.connect(lambda _: self.inspect_img(img))
-            self.scroll_layout.addWidget(img_btn, row, column)
+                img_btn.clicked.connect(lambda checked=False, image=img: self.inspect_img(image))
+            self.scroll_layout.addWidget(img_widget, row, column)
 
         self.update_pagination_controls()
 
@@ -288,7 +329,7 @@ class ProjectWindow(QMainWindow):
             pass
 
     def inspect_img(self, image):
-        print("inspecting image ", image)
+        print(str(image))
         image_list = self.images.copy()
         if image:
             self.controller.switch_page(3)
@@ -415,7 +456,7 @@ class ProjectWindow(QMainWindow):
         self.username = ""
         self.user_folder = Path(INSTALL_LOCATION)
         self.images.clear()
-        self.images_per_page = 20
+        self.images_per_page = 16
         self.current_page = 0
         self.needs_fp.clear()
         self.needs_fp_file = Path(INSTALL_LOCATION)

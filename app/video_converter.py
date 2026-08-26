@@ -4,7 +4,7 @@ from pathlib import Path
 import shutil
 import subprocess
 
-class VideoConverter():
+class VideoConverterOpenCV():
     def __init__(self, parents):
         self.parents = parents
 
@@ -65,7 +65,7 @@ class VideoConverter():
 
         return frame_final_locations
 
-class VideoConverter2():
+class VideoConverterFFMPEG():
     def __init__(self, parents):
         self.parents = parents
 
