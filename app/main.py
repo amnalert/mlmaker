@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from login import LoginWindow, NewAccountWindow
-from imgutil import ImageView, FirstPass
+from imgutil import ImageContainer, FirstPass
 from audioutil import MusicHandler 
 from project_explorer import ProjectExplorer
 from project_viewer import ProjectWindow
@@ -59,7 +59,7 @@ class MainController(QMainWindow):
         self.login_page = LoginWindow(self)
         self.create_account_page = NewAccountWindow(self)
         self.home = ProjectWindow(self)
-        self.image_viewer = ImageView(True, self, self)
+        self.image_viewer = ImageContainer(True, self, self)
         self.proj_explorer = ProjectExplorer(self)
         self.network_page = NetworkExplorer(self)
         self.first_pass_page = FirstPass(self)

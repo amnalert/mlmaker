@@ -23,12 +23,12 @@ class VideoConvertWorker(QObject):
         # Check dependencies for either ffmpeg or opencv
         converter_type = "ffmpeg"
         try:
-            import ffmpeg
+            import ffmpeg # type: ignore
             converter_type = "ffmpeg"
         except ImportError as e:
             print(f"Import Error: ffmpeg is not installed in this environment. ({str(e)})")
             try:
-                import cv2
+                import cv2 # type: ignore
                 converter_type = "cv2"
             except ImportError as e:
                 print(f"Import Error: OpenCV is not installed in this environment. ({str(e)})")
