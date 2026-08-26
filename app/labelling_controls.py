@@ -1,4 +1,4 @@
-from PySide6.QtGui import QCursor, QMouseEvent, QPainter, QPen, QKeyEvent, QColor, QFont
+from PySide6.QtGui import QCursor, QMouseEvent, QPainter, QPen, QKeyEvent, QColor, QFont, QWheelEvent, QPixmap, QPaintEvent
 from PySide6.QtCore import QPoint, Qt, QEvent, QRectF
 from PySide6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QSizePolicy, QComboBox, QInputDialog, QGridLayout, QScrollArea
 from pathlib import Path
@@ -78,6 +78,36 @@ class ImageLabellingControls(QWidget):
         self.parent_label.installEventFilter(self)
         self.resize(self.parent_label.size())
 
+        # Zooming with mouse wheel
+        self.zoom = 1.0
+        self.max_zoom = 10.0
+        self.min_zoom = 0.5
+
+        self.pan_offset = QPoint(0, 0)
+        self.last_mouse_pos = QPoint(0, 0)
+        self.is_panning = False
+
+    # Scroll wheel
+    def wheelEvent(self, event: QWheelEvent):
+        delta = event.angleDelta().y()
+
+        zoom_step = 1.15
+        old_zoom = self.zoom
+
+        if delta > 0:
+            self.zoom = min(self.max_zoom, self.zoom * zoom_step)
+        elif delta < 0:
+            self.zoom = max(self.min_zoom, self.zoom / zoom_step)
+
+        if self.zoom != old_zoom:
+            cursor_pos = event.position().toPoint()
+            self.pan_offset = cursor_pos - (cursor_pos - self.pan_offset)
+
+            self.update_parent_layout()
+            self.update()
+
+        event.accept()
+
     def change_default_class(self):
         choice, ok = QInputDialog.getItem(
             self,
@@ -104,37 +134,56 @@ class ImageLabellingControls(QWidget):
                 self.parents.controller.home.inspect_img(self.parents.images[self.parents.img_index - 1])
 
     def mouseMoveEvent(self, event):
-        self.mouse_pos = event.position().toPoint()
+        current_pos = event.position().toPoint()
+        if self.is_panning:
+            delta = current_pos - self.last_mouse_pos
+            self.pan_offset += delta
+            self.last_mouse_pos = current_pos
+        else:
+            self.mouse_pos = current_pos
+            # translate hover pos for status bar
+            img_x, img_y = self.widget_to_image_coords(self.mouse_pos.x(), self.mouse_pos.y())
+            self.mouse_pos_label.setText(f"Mouse: ({img_x}, {img_y})")
         self.update()
 
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.MiddleButton:
+            self.is_panning = False
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+
     def leaveEvent(self, event):
-        self.mouse_pos = QPoint(-1, -1)
         self.update()
 
     def mousePressEvent(self, event):
         pos = event.position()
         x = int(pos.x())
         y = int(pos.y())
-        
         self.setFocus()
+
+        if event.button() == Qt.MouseButton.MiddleButton:
+            self.is_panning = True
+            self.last_mouse_pos = event.position().toPoint()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            return
 
         if event.button() == Qt.MouseButton.RightButton:
             self.color_index = (self.color_index + 1) % len(self.colors)
             self.update()
         elif event.button() == Qt.MouseButton.LeftButton:
+            img_x, img_y = self.widget_to_image_coords(x, y)
             if self.current_box[0] == (-1, -1):
-                self.current_box[0] = (x, y)
-                self.box_label_1.setText(f"Point 1: {x, y}")
+                self.current_box[0] = (img_x, img_y)
+                self.box_label_1.setText(f"Point 1: {img_x, img_y}")
                 self.box_label_2.setText(f"Point 2: (0, 0)")
             else:
                 def_class = ""
                 if self.default_class != "none":
                     def_class = self.default_class
                 else:
-                    def_class = self.species[0]
+                    def_class = self.species[0] if self.species else "none"
 
-                self.current_box[1] = (x, y)
-                self.box_label_2.setText(f"Point 2: {x, y}")
+                self.current_box[1] = (img_x, img_y)
+                self.box_label_2.setText(f"Point 2: {img_x, img_y}")
                 self.write_box_data(self.current_box, def_class)
                 self.current_box = [(-1, -1), (-1, -1)]
                 
@@ -142,25 +191,7 @@ class ImageLabellingControls(QWidget):
 
     # Crosshair lines
     def _get_display_image_rect(self):
-        pixmap = self.parent_label.pixmap()
-        if not pixmap or pixmap.isNull():
-            return None
-
-        label_w = self.width()
-        label_h = self.height()
-        pix_w = pixmap.width()
-        pix_h = pixmap.height()
-
-        if label_w <= 0 or label_h <= 0:
-            return None
-
-        scale = min(label_w / pix_w, label_h / pix_h)
-        draw_w = max(1, int(pix_w * scale))
-        draw_h = max(1, int(pix_h * scale))
-        x_offset = (label_w - draw_w) // 2
-        y_offset = (label_h - draw_h) // 2
-
-        return x_offset, y_offset, draw_w, draw_h
+        return 0, 0, self.width(), self.height()
 
     def _draw_box_from_label(self, painter, label, color, width=2):
         try:
@@ -224,6 +255,7 @@ class ImageLabellingControls(QWidget):
         my = self.mouse_pos.y()
 
         painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
 
         if mx != -1 and my != -1:
             pen = QPen(self.colors[self.color_index], 1, Qt.PenStyle.DashLine)
@@ -375,6 +407,35 @@ class ImageLabellingControls(QWidget):
             # Show box on hover over the box_container
             box_container.installEventFilter(self)
 
+    def update_parent_layout(self):
+        """Scales and moves the underlying parent_label and matches this overlay to it."""
+        pixmap = self.parent_label.pixmap()
+        if not pixmap or pixmap.isNull():
+            return
+
+        # 1. Calculate the base aspect-ratio dimensions inside the main window
+        # (Assuming 'self.parents' is the main window container or has a fixed viewport)
+        viewport_w = self.parents.width()
+        viewport_h = self.parents.height()
+        
+        base_scale = min(viewport_w / pixmap.width(), viewport_h / pixmap.height())
+        
+        # 2. Factor in your scroll wheel zoom
+        final_scale = base_scale * self.zoom
+        new_w = max(1, int(pixmap.width() * final_scale))
+        new_h = max(1, int(pixmap.height() * final_scale))
+
+        # 3. Calculate positioning (centered viewport + panning offset)
+        new_x = (viewport_w - new_w) // 2 + self.pan_offset.x()
+        new_y = (viewport_h - new_h) // 2 + self.pan_offset.y()
+
+        # 4. Apply geometry to the underlying image label
+        # Ensure it scales the content smoothly to fit the new geometry bounds
+        self.parent_label.setScaledContents(True)
+        self.parent_label.setGeometry(new_x, new_y, new_w, new_h)
+
+        # 5. Snap your overlay controls widget to perfectly match the image label's layout
+        self.setGeometry(self.parent_label.geometry())
 
     def change_species_label(self, label, new_class):
         if label in self.boxes_lines:
@@ -400,9 +461,30 @@ class ImageLabellingControls(QWidget):
         
         self.load_saved_boxes(self.image_label_file)
 
+    def widget_to_image_coords(self, wx, wy):
+        """Converts local widget interface pixels back to original image raw pixels."""
+        rect = self._get_display_image_rect()
+        if not rect:
+            return wx, wy
+        x_offset, y_offset, draw_w, draw_h = rect
+        pixmap = self.parent_label.pixmap()
+        
+        if draw_w <= 0 or draw_h <= 0 or not pixmap:
+            return wx, wy
+
+        # Fraction along the drawn image boundary * full raw dimensions
+        img_x = int(((wx - x_offset) / draw_w) * pixmap.width())
+        img_y = int(((wy - y_offset) / draw_h) * pixmap.height())
+        
+        # Keep boundary guards locked between 0 and boundaries
+        img_x = max(0, min(img_x, pixmap.width() - 1))
+        img_y = max(0, min(img_y, pixmap.height() - 1))
+        return img_x, img_y
+
+
     def eventFilter(self, watched, event):
         if watched == self.parent_label:
-            if event.type() == QEvent.Type.Resize:
+            if event.type() == QEvent.Type.Wheel:
                 self.resize(self.parent_label.size())
                 self.move(self.parent_label.mapTo(self.parents, QPoint(0, 0)))
                 self.raise_()
