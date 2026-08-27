@@ -8,7 +8,7 @@ from login import LoginWindow, NewAccountWindow
 from imgutil import ImageContainer, FirstPass
 from audioutil import MusicHandler 
 from project_explorer import ProjectExplorer
-from project_viewer import ProjectWindow
+from project_viewer import ProjectView
 from network_explorer import NetworkExplorer
 
 SAVED_USER_DATA = ""
@@ -58,8 +58,8 @@ class MainController(QMainWindow):
             # Instantiate
         self.login_page = LoginWindow(self)
         self.create_account_page = NewAccountWindow(self)
-        self.home = ProjectWindow(self)
-        self.image_viewer = ImageContainer(True, self, self)
+        self.home = ProjectView(self)
+        self.image_viewer = ImageContainer(True, self.home, self)
         self.proj_explorer = ProjectExplorer(self)
         self.network_page = NetworkExplorer(self)
         self.first_pass_page = FirstPass(self)

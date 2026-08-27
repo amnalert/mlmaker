@@ -48,12 +48,12 @@ INSTALL_LOCATION = Path(__file__).resolve().parent.parent
 # ======================================================================
 
 class ImageContainer(QWidget):
-    def __init__(self, side_view, parents, controller):
+    def __init__(self, annotating, parents, controller):
         super().__init__()
 
         self.controller = controller
-        self.parents = parents
-        self.side_view = side_view
+        self.parents = parents # should be the ProjectView object
+        self.annotating = annotating
 
         self.project = ""
         self.images = []
@@ -92,15 +92,11 @@ class ImageContainer(QWidget):
         # Back/Menu button
         # --------------------------------------------------------------
 
-        if self.side_view:
+        if self.annotating:
             self.back_button = QPushButton("Back")
 
             self.back_button.clicked.connect(
-                lambda: self.controller.switch_page(2)
-            )
-
-            self.back_button.clicked.connect(
-                lambda: self.controller.home.update_image_page
+                lambda: (self.controller.switch_page(2), self.parents.load_saved_images(self.project, self.parents.username, self.parents.uuid))
             )
 
         else:
@@ -156,7 +152,7 @@ class ImageContainer(QWidget):
         # First pass UI
         # --------------------------------------------------------------
 
-        if not self.side_view:
+        if not self.annotating:
 
             self.autoskip_lbl = QLabel("Autoskip: True")
 
@@ -339,7 +335,7 @@ class ImageContainer(QWidget):
         # Annotation information
         # --------------------------------------------------------------
 
-        if self.side_view:
+        if self.annotating:
 
             self.species = (
                 self.controller.home.project_classes
@@ -385,7 +381,7 @@ class ImageContainer(QWidget):
         # Load saved boxes
         # --------------------------------------------------------------
 
-        if self.side_view:
+        if self.annotating:
             self.img_labelling_controls.load_saved_boxes(
                 self.image_label_file
             )
@@ -1164,53 +1160,37 @@ class FirstPass(QWidget):
 
     def delete_frames(self):
 
-        lines = (
-            self.needs_fp_file
-            .read_text()
-            .strip()
-            .splitlines()
-        )
+        lines = (self.needs_fp_file.read_text().strip().splitlines())
 
-        marked = (
-            self.marked_del +
-            self.marked_save
-        )
+        marked = (self.marked_del + self.marked_save)
 
-        marked_paths = {
-            Path(img)
-            .resolve()
-            .relative_to(
-                self.current_project.resolve()
-            )
-            .as_posix()
-            for img in marked
-        }
+        marked_paths = { Path(img).resolve().relative_to(self.current_project.resolve()).as_posix() for img in marked }
 
         lines = [
-            line
-            for line in lines
-            if Path(line).as_posix()
-            not in marked_paths
+            line for line in lines
+            if Path(line).as_posix() not in marked_paths
         ]
 
-        self.needs_fp_file.write_text(
-            "\n".join(lines)
-        )
+        self.needs_fp_file.write_text("\n".join(lines))
+
+        image_uploads = self.current_project / "image_uploads"
+        image_labels = self.current_project / "image_labels"
 
         for img in self.marked_del:
+            img = Path(img)
 
-            img.unlink(
-                missing_ok=True
-            )
+            try:
+                relative_img = img.resolve().relative_to(image_uploads.resolve())
+                label_file = image_labels / relative_img.parent / f"{relative_img.stem}.txt"
+                label_file.unlink(missing_ok=True)
+            except ValueError:
+                pass
 
+            img.unlink(missing_ok=True)
             if img in self.all_input_imgs:
                 self.all_input_imgs.remove(img)
-
             if img in self.unmarked_imgs:
                 self.unmarked_imgs.remove(img)
-
-            if img in self.marked_save:
-                self.marked_save.remove(img)
 
         self.marked_del.clear()
 
@@ -1265,6 +1245,7 @@ class FirstPass(QWidget):
             )
 
             if reply == QMessageBox.StandardButton.Yes:
+                self.hide()
 
                 event.accept()
 

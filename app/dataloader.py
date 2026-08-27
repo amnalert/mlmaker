@@ -5,50 +5,40 @@ from pathlib import Path
 import shutil
 import tempfile
 
-from video_converter import VideoConverterOpenCV, VideoConverterFFMPEG
+from video_converter import VideoConverterFFMPEG
+from box_manager import UploadFromBox
 
 class VideoConvertWorker(QObject):
     finished = Signal(object, object)
-    failed = Signal(str)
+    failed = Signal(str, object)
     progress = Signal(int, int)
 
     def __init__(self, video_path, project_path, frame_keep_percentage, output_name):
         super().__init__()
+
         self.video_path = video_path
         self.project_path = project_path
         self.output_name = output_name
         self.frame_keep = frame_keep_percentage
 
     def run(self):
-        # Check dependencies for either ffmpeg or opencv
-        converter_type = "ffmpeg"
         try:
-            import ffmpeg # type: ignore
-            converter_type = "ffmpeg"
-        except ImportError as e:
-            print(f"Import Error: ffmpeg is not installed in this environment. ({str(e)})")
-            try:
-                import cv2 # type: ignore
-                converter_type = "cv2"
-            except ImportError as e:
-                print(f"Import Error: OpenCV is not installed in this environment. ({str(e)})")
-                self.failed.emit("import_fail")
-                return
-
-        if converter_type == "ffmpeg":
             converter = VideoConverterFFMPEG(self)
-        else:
-            converter = VideoConverterOpenCV(self)
+            converted_frames = converter.probe(self.video_path, self.project_path, self.frame_keep, self.output_name)
 
-        try:
-            converted_frames = converter.convert_mp4(self.video_path, self.project_path, self.frame_keep, self.output_name)
-            label_folder = Path(self.project_path) / "image_labels" / Path(self.output_name)
+            label_folder = (Path(self.project_path) / "image_labels" / self.output_name)
             label_folder.mkdir(parents=True, exist_ok=True)
+
             for frame in converted_frames:
-                (label_folder / f"{Path(frame).stem}.txt").touch()
+                label_path = (label_folder / f"{Path(frame).stem}.txt")
+                label_path.touch()
+
             self.finished.emit(converted_frames, self.video_path)
+
         except Exception as exc:
-            self.failed.emit(str(exc))
+            print(f"[VideoConverter] Worker exception: {exc}")
+
+            self.failed.emit(str(exc), self.video_path)
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv"}
@@ -85,68 +75,151 @@ def extract_zip_contents(zip_path, image_location, downloads_location):
 
     return extracted_files
 
-class UploadImages(QPushButton):
+class UploadFiles(QPushButton):
     def __init__(self, parents, controller):
-        super().__init__("Upload Unlabelled Images/Videos")
+        super().__init__("Upload from Computer")
+
         self.controller = controller
         self.parent_widget = parents
 
         self.project = ""
+        self.project_uuid = None
         self.image_uploads = ""
+
         self.video_queue = []
+        self.images = []
+
         self._video_processing = False
-        self._default_text = "Upload Unlabelled Images/Videos"
+        self._default_text = "Upload Images/Videos"
+
         self._video_thread = None
         self._video_worker = None
 
+        self._current_video = None
+        self._current_video_directory = None
+
         self.clicked.connect(self.open_dialog)
-        self.images = []
 
     def open_dialog(self):
-        self.project = Path(self.parent_widget.current_project)
-        self.project_uuid = self.parent_widget.uuid
+        self.project = Path(
+            self.parent_widget.current_project
+        )
+
+        self.project_uuid = (
+            self.parent_widget.uuid
+        )
+
         files = ImageLoader().load_files(self)
 
-        self.image_uploads = self.project / "image_uploads"
-        singlet_location = self.project / "image_uploads" / "singlet_images"
-        singlet_location.mkdir(parents=True, exist_ok=True)
-        if files:
-            for file in files:
-                path = Path(file)
-                dest = self.image_uploads / "singlet_images" / path.name
+        self.image_uploads = (
+            self.project / "image_uploads"
+        )
+
+        singlet_location = (
+            self.image_uploads /
+            "singlet_images"
+        )
+
+        singlet_location.mkdir(
+            parents=True,
+            exist_ok=True
+        )
+
+        if not files:
+            return
+
+        for file in files:
+            path = Path(file)
+
+            if path.suffix.lower() == ".zip":
+                extracted_files = extract_zip_contents(
+                    path,
+                    self.image_uploads,
+                    self.image_uploads
+                )
+
+                for destination in extracted_files:
+
+                    if (
+                        destination.suffix.lower()
+                        in VIDEO_EXTENSIONS
+                    ):
+                        self.video_queue.append(
+                            (
+                                destination,
+                                Path(self.project),
+                                destination.stem
+                            )
+                        )
+
+                    elif (
+                        destination.suffix.lower()
+                        in IMAGE_EXTENSIONS
+                    ):
+                        self.images.append(
+                            destination
+                        )
+
+            elif (
+                path.suffix.lower()
+                in IMAGE_EXTENSIONS
+            ):
+                dest = (
+                    singlet_location /
+                    path.name
+                )
+
                 counter = 1
+
                 while dest.exists():
-                    dest = self.image_uploads / "singlet_images" / f"{path.stem}_{counter}{path.suffix}"
+                    dest = (
+                        singlet_location /
+                        f"{path.stem}_{counter}"
+                        f"{path.suffix}"
+                    )
+
                     counter += 1
-                if path.suffix.lower() == ".zip":
-                    extracted_files = extract_zip_contents(path, self.image_uploads, self.image_uploads)
-                    for destination in extracted_files:
-                        if destination.suffix.lower() in VIDEO_EXTENSIONS:
-                            self.video_queue.append((destination, Path(self.project), destination.stem))
-                        elif destination.suffix.lower() in IMAGE_EXTENSIONS:
-                            self.images.append(destination)
-                elif path.suffix.lower() in IMAGE_EXTENSIONS:
-                    self.images.append(dest)
-                    shutil.copy2(path, dest)
-                elif path.suffix.lower() in VIDEO_EXTENSIONS:
-                    self.video_queue.append((path, Path(self.project), path.stem))
 
-            if self.video_queue:
-                self._process_next_video()
-                return
+                shutil.copy2(
+                    path,
+                    dest
+                )
 
-            self.images = []
-            self.parent_widget.load_saved_images(self.project, self.parent_widget.username, self.project_uuid)
+                self.images.append(dest)
+
+            elif (
+                path.suffix.lower()
+                in VIDEO_EXTENSIONS
+            ):
+                self.video_queue.append(
+                    (
+                        path,
+                        Path(self.project),
+                        path.stem
+                    )
+                )
+
+        if self.video_queue:
+            self._process_next_video()
+            return
+
+        self.images = []
+
+        self.parent_widget.load_saved_images(
+            self.project,
+            self.parent_widget.username,
+            self.project_uuid
+        )
 
     def _resolve_video_name(self, video_name):
         base_name = video_name
-        candidate = self.image_uploads / base_name
+        candidate = (Path(self.image_uploads) / base_name)
         if not candidate.exists():
             return base_name
 
         index = 1
         while True:
-            candidate = Path(self.image_uploads) / f"{base_name}_{index}"
+            candidate = (Path(self.image_uploads) / f"{base_name}_{index}")
             if not candidate.exists():
                 break
             index += 1
@@ -154,111 +227,371 @@ class UploadImages(QPushButton):
         return f"{base_name}_{index}"
 
     def _process_next_video(self):
-        if self._video_processing or not self.video_queue:
-            if not self._video_processing and not self.video_queue:
-                self.images = []
-                self.setText(self._default_text)
-                self.setEnabled(True)
-                print("[VideoConverter] Finished converting all videos.")
-                QTimer.singleShot(0, lambda: self.parent_widget.load_saved_images(self.project, self.parent_widget.username, self.project_uuid))
+
+        if self._video_processing:
+            return
+
+        if not self.video_queue:
+            self._finish_video_processing()
             return
 
         self._video_processing = True
-        self.setEnabled(False)
-        self.setText("Converting video 1 of 1 (0/0 Frames)")
 
-        video_path, project_path, output_name = self.video_queue.pop(0)
-        input_name, ok = QInputDialog().getText(self, "Video Name","Please enter a unique video name(leave blank for video original name, but preferably describe the video contents with the name):", QLineEdit.EchoMode.Normal, output_name if output_name else "")
+        self.setEnabled(False)
+
+        remaining = len(self.video_queue)
+
+        self.setText(
+            f"Converting video "
+            f"({remaining + 1} Remaining) "
+            f"(Frame 0/0)"
+        )
+
+        video_path, project_path, output_name = (
+            self.video_queue.pop(0)
+        )
+
+        self._current_video = Path(video_path)
+
+        input_name, ok = QInputDialog.getText(
+            self,
+            "Video Name",
+            "Please enter a unique video name "
+            "(leave blank for video original name, "
+            "but preferably describe the video contents "
+            "with the name):",
+            QLineEdit.EchoMode.Normal,
+            output_name if output_name else ""
+        )
+
         if not ok:
-            QMessageBox.information(self, "Cancelled", f"Video upload cancelled: {video_path.stem}")
+            QMessageBox.information(
+                self,
+                "Cancelled",
+                f"Video upload cancelled: "
+                f"{video_path.stem}"
+            )
+
+            self._video_processing = False
+            self._current_video = None
+
+            QTimer.singleShot(
+                0,
+                self._process_next_video
+            )
+
             return
+
         if input_name.strip() == "":
             input_name = output_name
 
-        resolved_name = self._resolve_video_name(input_name)
-        dest_path = Path(self.image_uploads) / f"{resolved_name}"
-        dest_fpath = f"{resolved_name}{video_path.suffix}"
-        dest_path.mkdir(exist_ok=True)
+        resolved_name = (
+            self._resolve_video_name(
+                input_name.strip()
+            )
+        )
+
+        dest_path = (Path(self.image_uploads) / resolved_name)
+
+        dest_path.mkdir(
+            parents=True,
+            exist_ok=True
+        )
+
+        dest_fpath = (
+            f"{resolved_name}"
+            f"{video_path.suffix}"
+        )
+
+        destination_video = (
+            dest_path /
+            dest_fpath
+        )
+
         try:
-            shutil.copy2(video_path, dest_path / dest_fpath)
+            shutil.copy2(
+                video_path,
+                destination_video
+            )
+
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to rename video: {str(e)}")
-            dest_path = video_path
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to copy video:\n\n{e}"
+            )
+
+            try:
+                if dest_path.exists():
+                    shutil.rmtree(dest_path)
+            except OSError:
+                pass
+
+            self._video_processing = False
+            self._current_video = None
+
+            QTimer.singleShot(
+                0,
+                self._process_next_video
+            )
+
+            return
+
+        self._current_video_directory = dest_path
 
         frame_keep, ok = QInputDialog.getInt(
             self,
             "Frame Keep Percentage",
-            f"Choose % of frames to keep(0-100, where 0 is delete the video and 100 is keep all frames):",
+            "Choose % of frames to keep "
+            "(0-100, where 0 is delete the video "
+            "and 100 is keep all frames):",
             value=100,
             minValue=0,
             maxValue=100,
             step=5
         )
-        if not ok:
-            QMessageBox.information(self, "Cancelled", f"Video upload cancelled: {video_path.stem}")
-            return
-            
-        self._video_thread = QThread(self)
-        self._video_worker = VideoConvertWorker(dest_path / dest_fpath, project_path, frame_keep, resolved_name)
-        self._video_worker.moveToThread(self._video_thread)
 
-        self._video_thread.started.connect(self._video_worker.run)
-        self._video_worker.progress.connect(self._handle_video_progress)
-        self._video_worker.finished.connect(self._handle_video_result)
-        self._video_worker.failed.connect(self._handle_video_error)
-        self._video_worker.finished.connect(self._video_thread.quit)
-        self._video_worker.failed.connect(self._video_thread.quit)
-        self._video_worker.finished.connect(self._video_worker.deleteLater)
-        self._video_worker.failed.connect(self._video_worker.deleteLater)
-        self._video_thread.finished.connect(self._video_thread.deleteLater)
-        self._video_thread.finished.connect(self._video_thread_finished)
+        if not ok:
+            QMessageBox.information(
+                self,
+                "Cancelled",
+                f"Video upload cancelled: "
+                f"{video_path.stem}"
+            )
+
+            try:
+                if dest_path.exists():
+                    shutil.rmtree(dest_path)
+            except OSError:
+                pass
+
+            self._video_processing = False
+            self._current_video = None
+            self._current_video_directory = None
+
+            QTimer.singleShot(
+                0,
+                self._process_next_video
+            )
+
+            return
+
+        if frame_keep == 0:
+            print(
+                f"[VideoConverter] Frame keep percentage "
+                f"is 0. Skipping video: "
+                f"{destination_video}"
+            )
+
+            try:
+                if dest_path.exists():
+                    shutil.rmtree(dest_path)
+            except OSError as e:
+                print(
+                    f"[VideoConverter] Could not remove "
+                    f"skipped video: {e}"
+                )
+
+            self._video_processing = False
+            self._current_video = None
+            self._current_video_directory = None
+
+            QTimer.singleShot(
+                0,
+                self._process_next_video
+            )
+
+            return
+
+        self._video_thread = QThread(self)
+
+        self._video_worker = VideoConvertWorker(
+            destination_video,
+            project_path,
+            frame_keep,
+            resolved_name
+        )
+
+        self._video_worker.moveToThread(
+            self._video_thread
+        )
+
+        self._video_thread.started.connect(
+            self._video_worker.run
+        )
+
+        self._video_worker.progress.connect(
+            self._handle_video_progress
+        )
+
+        self._video_worker.finished.connect(
+            self._handle_video_result
+        )
+
+        self._video_worker.failed.connect(
+            self._handle_video_error
+        )
+
+        self._video_worker.finished.connect(
+            self._video_thread.quit
+        )
+
+        self._video_worker.failed.connect(
+            self._video_thread.quit
+        )
+
+        self._video_thread.finished.connect(
+            self._video_worker.deleteLater
+        )
+
+        self._video_thread.finished.connect(
+            self._video_thread_finished
+        )
+
+        print(
+            "[VideoConverter] Starting worker thread."
+        )
 
         self._video_thread.start()
 
-    def _handle_video_progress(self, processed_frames, total_frames):
-        self.setText(
-            f"Converting video ({len(self.video_queue) + 1} Remaining) "
-            f"(Frame {processed_frames}/{total_frames})"
+    def _handle_video_progress(
+        self,
+        processed_frames,
+        total_frames
+    ):
+        if total_frames > 0:
+            self.setText(
+                f"Converting video "
+                f"({len(self.video_queue) + 1} Remaining) "
+                f"(Frame "
+                f"{processed_frames}/"
+                f"{total_frames})"
+            )
+
+        else:
+            self.setText(
+                f"Converting video "
+                f"({len(self.video_queue) + 1} Remaining) "
+                f"(Frame "
+                f"{processed_frames}/?)"
+            )
+
+    def _handle_video_result(
+        self,
+        converted_frames,
+        video
+    ):
+        print(
+            "[VideoConverter] Worker reported successful "
+            "conversion."
         )
 
-    def _handle_video_result(self, converted_frames, video):
-        frames = [Path(p) for p in converted_frames]
+        frames = [
+            Path(p)
+            for p in converted_frames
+        ]
+
         self.images.extend(frames)
-        self._video_processing = False
 
-        if video in Path(self.image_uploads).iterdir():
-            shutil.move(video, (self.image_uploads / video.stem))
+        video = Path(video)
 
-        if len(self.video_queue) > 0:
-            self._process_next_video()
-        else:
-            print("Finished converting all videos.")
-            self.setText(self._default_text)
-            self.setEnabled(True)
-            QTimer.singleShot(0, lambda: self.parent_widget.load_saved_images(self.project, self.parent_widget.username, self.project_uuid))
+        try:
+            if video.exists():
+                source_directory = video.parent
 
-    def _video_thread_finished(self):
-        self._video_thread = None
-        self._video_worker = None
+                if source_directory.exists():
+                    print(
+                        f"[VideoConverter] Video stored at "
+                        f"{source_directory}"
+                    )
 
-    def _handle_video_error(self, exc):
+        except Exception as e:
+            print(
+                f"[VideoConverter] Could not finalize "
+                f"video location: {e}"
+            )
+
+    def _handle_video_error(
+        self,
+        exc,
+        video
+    ):
+        print(
+            f"[VideoConverter] Conversion failed: "
+            f"{exc}"
+        )
+
         if exc == "import_fail":
             QMessageBox.critical(
                 self,
                 "Video conversion failed",
-                "At least one of the following packages are required for video conversion: ffmpeg-python (recommended), opencv-python (resource intensive). Please add them to your environment.",
+                "At least one of the following packages "
+                "is required for video conversion:\n\n"
+                "ffmpeg-python\n"
+                "opencv-python"
             )
 
-        self._video_processing = False
+        else:
+            QMessageBox.critical(
+                self,
+                "Video conversion failed",
+                f"Could not process one of the "
+                f"uploaded videos:\n\n"
+                f"{exc}\n\n"
+                f"Video: {video}"
+            )
+
+    def _video_thread_finished(self):
+        print(
+            "[VideoConverter] QThread finished."
+        )
+
+        finished_thread = self._video_thread
+        finished_worker = self._video_worker
+
         self._video_thread = None
         self._video_worker = None
-        self.setText(self._default_text)
+
+        self._video_processing = False
+
+        self._current_video = None
+        self._current_video_directory = None
+
+        if self.video_queue:
+            print(
+                "[VideoConverter] Starting next video."
+            )
+
+            QTimer.singleShot(
+                0,
+                self._process_next_video
+            )
+
+            return
+
+        self._finish_video_processing()
+
+    def _finish_video_processing(self):
+        print(
+            "[VideoConverter] Finished converting "
+            "all videos."
+        )
+
+        self._video_processing = False
+
+        self.setText(
+            self._default_text
+        )
+
         self.setEnabled(True)
-        self._process_next_video()
-        QMessageBox.critical(
-            self,
-            "Video conversion failed",
-            f"Could not process one of the uploaded videos: {exc}",
+
+        QTimer.singleShot(
+            0,
+            lambda: self.parent_widget.load_saved_images(
+                self.project,
+                self.parent_widget.username,
+                self.project_uuid
+            )
         )
 
 class ImageLoader:

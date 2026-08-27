@@ -1,107 +1,262 @@
-from PySide6.QtWidgets import QApplication, QGridLayout, QWidget, QPushButton, QMainWindow, QLabel, QLineEdit, QHBoxLayout, QLabel, QVBoxLayout, QInputDialog, QMessageBox, QScrollArea
-from PySide6.QtCore import QSize, Qt, QDir, QDirIterator
-from PySide6.QtGui import QPixmap, QIcon, QCursor, QIntValidator, QFont
+from PySide6.QtWidgets import (
+    QApplication, QGridLayout, QWidget, QPushButton, QMainWindow, QLabel,
+    QLineEdit, QHBoxLayout, QVBoxLayout, QInputDialog, QMessageBox,
+    QScrollArea
+)
+from PySide6.QtCore import QSize, Qt, QObject, Signal, Slot, QThread, QTimer
+from PySide6.QtGui import QPixmap, QIcon, QCursor, QFont
 import math
 from pathlib import Path
 
-from dataloader import UploadImages, UploadLabels
+from dataloader import UploadFiles
 from tcp_manager import TCPManager
 
-SAVED_USER_DATA = ""
 INSTALL_LOCATION = Path(__file__).resolve().parent.parent
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
-class ProjectWindow(QMainWindow):
+
+class ProjectLoadWorker(QObject):
+    finished = Signal(object, object, object, object)
+    failed = Signal(str)
+
+    def __init__(self, project_folder, needs_fp_file):
+        super().__init__()
+        self.project_folder = Path(project_folder)
+        self.needs_fp_file = Path(needs_fp_file)
+
+    @Slot()
+    def run(self):
+        try:
+            uploads = self.project_folder / "image_uploads"
+            labels = self.project_folder / "image_labels"
+            class_file = self.project_folder / "class_list.txt"
+
+            uploads.mkdir(parents=True, exist_ok=True)
+            labels.mkdir(parents=True, exist_ok=True)
+            class_file.touch(exist_ok=True)
+            self.needs_fp_file.touch(exist_ok=True)
+
+            needs_fp = []
+            raw = self.needs_fp_file.read_text(errors="ignore").strip()
+
+            if raw:
+                for line in raw.splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+
+                    path = Path(line)
+                    if not path.is_absolute():
+                        path = self.project_folder / path
+
+                    path = path.resolve()
+
+                    if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS:
+                        needs_fp.append(path)
+
+            needs_fp_set = set(needs_fp)
+
+            images = []
+            if uploads.exists():
+                for path in uploads.rglob("*"):
+                    if not path.is_file():
+                        continue
+                    if path.suffix.lower() not in IMAGE_EXTENSIONS:
+                        continue
+
+                    resolved = path.resolve()
+                    if resolved in needs_fp_set:
+                        continue
+
+                    images.append(path)
+
+            images.sort(key=lambda p: p.as_posix().lower())
+
+            relative_needs_fp = []
+            for path in needs_fp:
+                try:
+                    relative_needs_fp.append(
+                        str(path.relative_to(self.project_folder))
+                    )
+                except ValueError:
+                    pass
+
+            self.needs_fp_file.write_text(
+                "\n".join(relative_needs_fp)
+            )
+
+            class_data = class_file.read_text(errors="ignore").strip()
+            project_classes = [
+                cls.strip()
+                for cls in class_data.split(",")
+                if cls.strip()
+            ] if class_data else []
+
+            self.finished.emit(
+                images,
+                needs_fp,
+                project_classes,
+                labels
+            )
+
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
+class ProjectLabelWorker(QObject):
+    finished = Signal(object, object)
+    failed = Signal(str)
+
+    def __init__(self, image_uploads, image_labels, image_paths):
+        super().__init__()
+        self.image_uploads = Path(image_uploads)
+        self.image_labels = Path(image_labels)
+        self.image_paths = [Path(p) for p in image_paths]
+
+    @Slot()
+    def run(self):
+        try:
+            self.image_uploads.mkdir(parents=True, exist_ok=True)
+            self.image_labels.mkdir(parents=True, exist_ok=True)
+
+            expected_labels = set()
+
+            for image in self.image_paths:
+                try:
+                    relative = image.relative_to(self.image_uploads)
+                except ValueError:
+                    continue
+
+                label = (
+                    self.image_labels
+                    / relative.parent
+                    / f"{relative.stem}.txt"
+                )
+
+                label.parent.mkdir(parents=True, exist_ok=True)
+                label.touch(exist_ok=True)
+                expected_labels.add(label.resolve())
+
+            unmatched = []
+
+            for label in self.image_labels.rglob("*.txt"):
+                if label.resolve() not in expected_labels:
+                    unmatched.append(label)
+
+            unmatched.sort(key=lambda p: p.as_posix().lower())
+
+            self.finished.emit(expected_labels, unmatched)
+
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
+class ProjectView(QMainWindow):
     def __init__(self, controller):
         super().__init__()
         self.controller = controller
 
-        ### INITIALIZE VARIABLES
-
-        # User info
         self.username = ""
+        self.user_folder = Path(INSTALL_LOCATION)
         self.folder_icon = Path(INSTALL_LOCATION) / "assets" / "app_pics" / "folder.png"
 
-        # Images
         self.images = []
         self.images_per_page = 16
         self.current_page = 0
         self.needs_fp = []
+        self._needs_fp_set = set()
         self.needs_fp_file = Path(INSTALL_LOCATION)
 
-        # Project
         self.project_classes = []
         self.labels_without_images = []
-        self.current_project = ""
+        self.current_project = Path(INSTALL_LOCATION)
+        self.prj_folder = Path(INSTALL_LOCATION)
         self.uuid = ""
 
-        # Fonts
+        self._load_thread = None
+        self._load_worker = None
+        self._loading_project = False
+
+        self._label_thread = None
+        self._label_worker = None
+
+        self._thumbnail_cache = {}
+        self._resize_timer = QTimer(self)
+        self._resize_timer.setSingleShot(True)
+        self._resize_timer.setInterval(200)
+        self._resize_timer.timeout.connect(self._update_after_resize)
+        self._last_grid_width = 0
+        self._grid_update_pending = False
+
         self.pt16 = QFont()
-        self.pt8 = QFont()
         self.pt16.setPointSize(16)
+
+        self.pt8 = QFont()
         self.pt8.setPointSize(8)
-        self.current_project = ""
 
-        ### WINDOW SIZING
-
-        # Main window
-        current_screen = QApplication.screenAt(QCursor.pos())
-        if not current_screen:
-            current_screen = QApplication.primaryScreen()
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
-        self.mlayout = QVBoxLayout(central_widget)
-        central_widget.setLayout(self.mlayout)
 
-        ### INSTANTIATE OBJECTS
+        self.mlayout = QVBoxLayout(central_widget)
+        self.mlayout.setSpacing(2)
+
         self.show_user = QLabel("")
         self.show_project = QLabel("")
         self.show_uuid = QLabel("")
         self.show_uuid.setFont(self.pt8)
-        self.mlayout.addWidget(self.show_user, alignment=Qt.AlignmentFlag.AlignTop) 
-        self.mlayout.addWidget(self.show_project, alignment=Qt.AlignmentFlag.AlignTop) 
-        self.mlayout.addWidget(self.show_uuid, alignment=Qt.AlignmentFlag.AlignTop)
 
-        self.upload_imgs = UploadImages(self, self.controller)
-        self.mlayout.addWidget(self.upload_imgs, alignment=Qt.AlignmentFlag.AlignBottom)
+        self.mlayout.addWidget(self.show_user)
+        self.mlayout.addWidget(self.show_project)
+        self.mlayout.addWidget(self.show_uuid)
 
-        self.upload_labels = UploadLabels(self, self.controller)
-        self.mlayout.addWidget(self.upload_labels, alignment=Qt.AlignmentFlag.AlignBottom)
+        self.upload_files = UploadFiles(self, self.controller)
+        self.mlayout.addWidget(self.upload_files)
 
-        self.labels_without_images_label = QLabel("Labels missing images: 0")
-        self.pt16 = QFont()
-        self.pt16.setPointSize(16)
+        self.labels_without_images_label = QLabel(
+            "Labels missing images: 0"
+        )
         self.labels_without_images_label.setFont(self.pt16)
-        self.view_missing_images_list = QPushButton("View Unmatched Label Files")
-        self.view_missing_images_list.setEnabled(False)
-        self.view_missing_images_list.clicked.connect(lambda _: self.view_missing_images(self.labels_without_images))
-        self.mlayout.addWidget(self.labels_without_images_label, alignment=Qt.AlignmentFlag.AlignBottom)
-        self.mlayout.addWidget(self.view_missing_images_list, alignment=Qt.AlignmentFlag.AlignBottom)
 
-        # Species information for this project
+        self.view_missing_images_list = QPushButton(
+            "View Unmatched Label Files"
+        )
+        self.view_missing_images_list.setEnabled(False)
+        self.view_missing_images_list.clicked.connect(
+            lambda: self.view_missing_images(self.labels_without_images)
+        )
+
+        self.mlayout.addWidget(self.labels_without_images_label, alignment=Qt.AlignmentFlag.AlignRight)
+        self.mlayout.addWidget(self.view_missing_images_list, alignment=Qt.AlignmentFlag.AlignRight)
+
         self.edit_class_btn = QPushButton("Edit class list")
         self.edit_class_btn.clicked.connect(self.edit_class_list)
-        self.mlayout.addWidget(self.edit_class_btn, alignment=(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom))
+        self.mlayout.addWidget(
+            self.edit_class_btn,
+            alignment=Qt.AlignmentFlag.AlignRight
+        )
 
-        # Showing images
+        self.loading_label = QLabel("")
+        self.loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.loading_label.hide()
+        self.mlayout.addWidget(self.loading_label)
+
         self.scroll_imgs = QScrollArea(self)
         self.scroll_imgs.setWidgetResizable(True)
-        self.scroll_imgs.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.scroll_imgs.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.mlayout.addWidget(self.scroll_imgs)
+        self.scroll_imgs.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.scroll_imgs.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
 
         self.scroll_content = QWidget()
         self.scroll_layout = QGridLayout(self.scroll_content)
         self.scroll_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.scroll_layout.setSpacing(5)
-        for i in range(8):
-            self.scroll_layout.setColumnStretch(i, 1)
-        for i in range(6):
-            self.scroll_layout.setRowStretch(i, 1)
 
         self.scroll_imgs.setWidget(self.scroll_content)
+        self.mlayout.addWidget(self.scroll_imgs)
 
-        # Page layout 
         self.page_layout = QHBoxLayout()
 
         self.prev_btn = QPushButton("Previous")
@@ -115,188 +270,474 @@ class ProjectWindow(QMainWindow):
         self.page_layout.addWidget(self.next_btn)
         self.page_layout.addWidget(self.page_lbl)
 
-        self.mlayout.addLayout(self.page_layout)
-
         self.image_count_label = QLabel("Images per page:")
-        self.image_count_input = QLineEdit()
-        self.image_count_input.setText("16")
+
+        self.image_count_input = QLineEdit("16")
         self.image_count_input.setFixedWidth(50)
-        self.image_count_input.setValidator(QIntValidator(1, 100))
-        self.image_count_input.returnPressed.connect(self.change_images_per_page)
+        self.image_count_input.returnPressed.connect(
+            self.change_images_per_page
+        )
 
         self.page_layout.addWidget(self.image_count_label)
         self.page_layout.addWidget(self.image_count_input)
 
-        # Exit project
         self.back_btn = QPushButton("Back")
         self.back_btn.setFixedHeight(40)
-        self.back_btn.clicked.connect(lambda _: self.controller.switch_page(4))
-        self.back_btn.clicked.connect(lambda _: self.update_image_page)
+        self.back_btn.clicked.connect(
+            lambda: self.controller.switch_page(4)
+        )
         self.page_layout.addWidget(self.back_btn)
 
-        # Connect to TCP/UDP
         self.tcp_manager = TCPManager(self, self.controller)
 
         self.tcp_connect_button = QPushButton("Send/Receive Data")
         self.tcp_connect_button.setEnabled(False)
         self.tcp_connect_button.setFixedHeight(40)
-        self.tcp_connect_button.clicked.connect(lambda _: self.tcp_button)
+        self.tcp_connect_button.clicked.connect(self.tcp_button)
         self.page_layout.addWidget(self.tcp_connect_button)
 
+        self.mlayout.addLayout(self.page_layout)
+
     def tcp_button(self):
-        self.controller.network_page.receive_data(self.username, self.prj_folder)
+        self.controller.network_page.receive_data(
+            self.username,
+            self.prj_folder
+        )
         self.controller.switch_page(5)
 
     def load_saved_images(self, prj, username, prj_uuid):
-        self.needs_fp.clear()
-        self.user_folder = Path(INSTALL_LOCATION / "users" / username)
+        if self._load_thread is not None:
+            return
+
         self.username = username
-        self.prj_folder = Path(self.user_folder / prj)
-        self.current_project = prj
+        self.user_folder = Path(INSTALL_LOCATION) / "users" / username
+        self.prj_folder = self.user_folder / Path(prj)
+        self.current_project = self.prj_folder
         self.uuid = prj_uuid
-        self.needs_fp_file = Path(self.user_folder) / prj / "needs_first_pass.txt"
-        self.needs_fp_file.touch(exist_ok=True)
-        # needs_fp_file has absolute_path\n for each file
-        self.needs_fp = [Path(prj / p) for p in self.needs_fp_file.read_text().strip().splitlines()]
-        uploads = self.prj_folder / "image_uploads"
-        uploaded_files = set()
-        iterator = QDirIterator(str(uploads), QDir.Filter.Files, QDirIterator.IteratorFlag.Subdirectories)
-        while iterator.hasNext():
-            file_path_str = Path(iterator.filePath()).resolve().as_posix()
-            uploaded_files.add(file_path_str)
-            iterator.next()
+        self.needs_fp_file = self.prj_folder / "needs_first_pass.txt"
+
+        self.images.clear()
+        self.needs_fp.clear()
+        self._needs_fp_set.clear()
+        self.labels_without_images.clear()
+        self._thumbnail_cache.clear()
+        self.current_page = 0
+
+        self.show_user.setText(f"User: {username}")
+        self.show_project.setText(
+            f"Project: {self.prj_folder.name}"
+        )
+        self.show_uuid.setText(f"UUID: {prj_uuid}")
+
+        self.clear_img_grid()
+
+        self._loading_project = True
+        self.loading_label.setText("Loading project...")
+        self.loading_label.show()
+
+        self.upload_files.setEnabled(False)
+        self.edit_class_btn.setEnabled(False)
+        self.view_missing_images_list.setEnabled(False)
+
+        self._load_thread = QThread(self)
+        self._load_worker = ProjectLoadWorker(
+            self.prj_folder,
+            self.needs_fp_file
+        )
+        self._load_worker.moveToThread(self._load_thread)
+
+        self._load_thread.started.connect(
+            self._load_worker.run
+        )
+        self._load_worker.finished.connect(
+            self._images_loaded
+        )
+        self._load_worker.failed.connect(
+            self._image_load_failed
+        )
+
+        self._load_worker.finished.connect(
+            self._load_thread.quit
+        )
+        self._load_worker.failed.connect(
+            self._load_thread.quit
+        )
+
+        self._load_thread.finished.connect(
+            self._load_thread_finished
+        )
+
+        self._load_thread.start()
+
+    @Slot(object, object, object, object)
+    def _images_loaded(self, images, needs_fp, project_classes, labels_folder):
+        self.images = [
+            Path(image)
+            for image in images
+            if Path(image).is_file()
+        ]
 
         self.needs_fp = [
-            path for path in self.needs_fp if path.resolve().as_posix() in uploaded_files
+            Path(image)
+            for image in needs_fp
+            if Path(image).is_file()
         ]
-        relative_paths = [
-            path.resolve().relative_to(self.prj_folder.resolve()) for path in self.needs_fp
-        ]
-        self.needs_fp_file.write_text("\n".join([str(img) for img in relative_paths]))
 
-        first_img = False 
-        if len(self.needs_fp) > 0:
-            # Show a folder icon in place of all the images in needs_fp
-            first_img = self.folder_icon
+        self._needs_fp_set = {
+            path.resolve()
+            for path in self.needs_fp
+        }
 
-        # Show images
-        if self.prj_folder.exists() and self.prj_folder.is_dir():
-            img_uploads = self.prj_folder / "image_uploads"
-            img_uploads.mkdir(parents=True, exist_ok=True)
-            imgs = [
-                p for p in img_uploads.rglob("*")
-                if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS
-            ]
-            if first_img:
-                imgs.insert(0, first_img)
-            imgs = list(dict.fromkeys(imgs))
-            self.show_images(imgs)
-            cls_list = self.prj_folder / "class_list.txt"
-            cls_list.touch()
-            with open(cls_list, "r") as f:
-                self.project_classes = f.read().strip().split(',')
+        self.project_classes = list(project_classes)
+        self._loading_project = False
 
-        self.show_project.setText(f"Project: {prj.name}")
+        self.loading_label.hide()
+        self.upload_files.setEnabled(True)
+        self.edit_class_btn.setEnabled(True)
+
+        self.current_page = 0
+
+        print(
+            f"[ProjectView] Loaded {len(self.images)} images."
+        )
+        print(
+            f"[ProjectView] {len(self.needs_fp)} images need first pass."
+        )
+
+        self.update_image_page()
         self.check_uploaded_labels()
 
+    @Slot(str)
+    def _image_load_failed(self, error):
+        self._loading_project = False
+        self.loading_label.hide()
+        self.upload_files.setEnabled(True)
+        self.edit_class_btn.setEnabled(True)
+
+        QMessageBox.critical(
+            self,
+            "Project Loading Error",
+            f"Could not load project:\n\n{error}"
+        )
+
+    def _load_thread_finished(self):
+        print("[ProjectView] Image loader thread finished.")
+        thread = self._load_thread
+        worker = self._load_worker
+        self._load_thread = None
+        self._load_worker = None
+
+        if worker is not None:
+            worker.deleteLater()
+
+        if thread is not None:
+            thread.deleteLater()
+
     def show_images(self, img_list):
-        # remove self.needs_fp while still leaving the folder image there
-        self.images = [f for f in img_list if Path(f).is_file() and f not in self.needs_fp]
+        self.images = [
+            Path(image)
+            for image in img_list
+            if Path(image).is_file()
+            and Path(image).resolve() not in self._needs_fp_set
+        ]
+
+        self.images.sort(
+            key=lambda p: p.as_posix().lower()
+        )
+
+        self.current_page = 0
+        self.update_image_page()
+
+    def finish_loading_images(self, images):
+        self.images = [
+            Path(image)
+            for image in images
+            if Path(image).is_file()
+            and Path(image).resolve() not in self._needs_fp_set
+        ]
+
+        self.images.sort(
+            key=lambda p: p.as_posix().lower()
+        )
+
         self.current_page = 0
         self.update_image_page()
 
     def update_image_page(self):
+        if self._loading_project:
+            return
+
         self.clear_img_grid()
 
-        page_images = self.images[
-            self.current_page * self.images_per_page:
-            (self.current_page + 1) * self.images_per_page
+        self.images = [
+            image for image in self.images
+            if image.is_file()
+            and image.resolve() not in self._needs_fp_set
         ]
 
-        num_images = len(page_images)
-        if num_images == 0:
+        page_start = self.current_page * self.images_per_page
+        page_end = page_start + self.images_per_page
+        page_images = self.images[page_start:page_end]
+
+        display_items = []
+
+        if self.needs_fp and self.current_page == 0:
+            display_items.append(self.folder_icon)
+
+        display_items.extend(page_images)
+
+        if not display_items:
             self.page_lbl.setText("No images")
+            self.update_pagination_controls()
             return
-        
-        columns = math.ceil(math.sqrt(num_images))
-        # rows = math.ceil(num_images / columns)
 
-        # Actual size
-        area_width = self.scroll_imgs.viewport().width() - 10
+        num_images = len(display_items)
+        columns = max(1, math.ceil(math.sqrt(num_images)))
 
-        thumb_width = area_width // columns
-        thumb_height = thumb_width        
+        area_width = max(
+            100,
+            self.scroll_imgs.viewport().width() - 10
+        )
 
-        row_heights = {}
+        thumb_width = max(
+            50,
+            area_width // columns
+        )
 
-        for index, img in enumerate(page_images):
-            if not Path(img).is_file():
-                continue
+        thumb_height = thumb_width
 
-            row = index // columns
-
-            pixmap = QPixmap(str(img))
-            scaled = pixmap.scaled(
-                thumb_width - 10,
-                thumb_height - 10,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation
-            )
-
-            row_heights[row] = max(
-                row_heights.get(row, 0),
-                scaled.height()
-            )
-
-        for index, img in enumerate(page_images):
-            if not Path(img).is_file():
-                continue
-
-            # Get # labels(rows in label file)
-            label_count = 0
-            with open(Path(self.current_project) / "image_labels" / f"{img.parent.stem}" / f"{img.stem}.txt", "r") as f:
-                label_count = sum(1 for line in f)
-
+        for index, image in enumerate(display_items):
             row = index // columns
             column = index % columns
 
-            img_widget = QWidget(self.scroll_content)
-            img_h = QHBoxLayout()
-            img_h.setContentsMargins(0, 0, 0, 0)
-            img_v = QVBoxLayout()
-            img_v.setContentsMargins(0, 0, 0, 0)
-            img_v.setSpacing(2)
-
-            box_info = QLabel(f"Labels: {label_count}")
-            del_btn = QPushButton("Delete")
-            img_h.addWidget(box_info)
-            img_h.addWidget(del_btn)
-
-            img_v.addLayout(img_h)
-
-            img_btn = QPushButton()
-            img_btn.setFixedSize(thumb_width, thumb_height)
-            img_v.addWidget(img_btn)
-
-            img_widget.setLayout(img_v)
-
-            thumb = QPixmap(str(img)).scaled(
-                thumb_width - 10,
-                thumb_height - 10,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation
-            )
-
-            img_btn.setIcon(QIcon(thumb))
-            img_btn.setIconSize(QSize(thumb_width - 10, thumb_height - 10))
-
-            if img == self.folder_icon:
-                img_btn.clicked.connect(lambda _: (self.controller.switch_page(6), self.controller.first_pass_page.begin_pass(self.needs_fp, self.current_project, self.user_folder, self.uuid)))
-            elif img:
-                img_btn.clicked.connect(lambda checked=False, image=img: self.inspect_img(image))
-            self.scroll_layout.addWidget(img_widget, row, column)
+            if image == self.folder_icon:
+                self._add_needs_fp_widget(
+                    row,
+                    column,
+                    thumb_width,
+                    thumb_height
+                )
+            else:
+                self._add_image_widget(
+                    image,
+                    row,
+                    column,
+                    thumb_width,
+                    thumb_height
+                )
 
         self.update_pagination_controls()
+
+    def _add_needs_fp_widget(self, row, column, thumb_width, thumb_height):
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+
+        info = QHBoxLayout()
+        info.setContentsMargins(0, 0, 0, 0)
+
+        info.addWidget(
+            QLabel(f"Images Needing FP: {len(self.needs_fp)}")
+        )
+
+        delete_button = QPushButton("Delete")
+        delete_button.clicked.connect(
+            self.delete_all_needs_fp_images
+        )
+        info.addWidget(delete_button)
+
+        layout.addLayout(info)
+
+        button = QPushButton()
+        button.setFixedSize(thumb_width, thumb_height)
+
+        thumb = self.get_thumbnail(
+            self.folder_icon,
+            max(1, thumb_width - 10),
+            max(1, thumb_height - 10)
+        )
+
+        if not thumb.isNull():
+            button.setIcon(QIcon(thumb))
+            button.setIconSize(
+                QSize(
+                    max(1, thumb_width - 10),
+                    max(1, thumb_height - 10)
+                )
+            )
+
+        button.clicked.connect(self._open_first_pass)
+
+        layout.addWidget(button)
+        self.scroll_layout.addWidget(widget, row, column)
+
+    def _add_image_widget(self, image, row, column, thumb_width, thumb_height):
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+
+        info = QHBoxLayout()
+        info.setContentsMargins(0, 0, 0, 0)
+
+        label_file = self._label_path_for_image(image)
+
+        label_count = 0
+
+        try:
+            if label_file.exists():
+                with open(label_file, "r", errors="ignore") as f:
+                    label_count = sum(1 for line in f if line.strip())
+        except OSError:
+            pass
+
+        label_info = QLabel(f"Labels: {label_count}")
+
+        if label_count == 0:
+            label_info.setStyleSheet(
+                "color: #FF5733; font-size: 16px; font-weight: bold"
+            )
+
+        delete_button = QPushButton("Delete")
+        delete_button.clicked.connect(
+            lambda checked=False, img=image:
+            self.delete_this_image(img)
+        )
+
+        info.addWidget(label_info)
+        info.addWidget(delete_button)
+        layout.addLayout(info)
+
+        button = QPushButton()
+        button.setFixedSize(thumb_width, thumb_height)
+
+        thumb = self.get_thumbnail(
+            image,
+            max(1, thumb_width - 10),
+            max(1, thumb_height - 10)
+        )
+
+        if not thumb.isNull():
+            button.setIcon(QIcon(thumb))
+            button.setIconSize(
+                QSize(
+                    max(1, thumb_width - 10),
+                    max(1, thumb_height - 10)
+                )
+            )
+
+        button.clicked.connect(
+            lambda checked=False, img=image:
+            self.inspect_img(img)
+        )
+
+        layout.addWidget(button)
+        self.scroll_layout.addWidget(widget, row, column)
+
+    def _label_path_for_image(self, image):
+        image = Path(image)
+        relative = image.relative_to(self.prj_folder / "image_uploads")
+
+        return (
+            self.prj_folder
+            / "image_labels"
+            / relative.parent
+            / f"{relative.stem}.txt"
+        )
+
+    def _open_first_pass(self):
+        self.controller.switch_page(6)
+        self.controller.first_pass_page.begin_pass(
+            self.needs_fp.copy(),
+            self.current_project,
+            self.user_folder,
+            self.uuid
+        )
+
+    def delete_this_image(self, image):
+        image = Path(image)
+
+        if not image.is_file():
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Remove Image",
+            f"Are you sure you want to remove {image.name} from the project?",
+            QMessageBox.StandardButton.Yes |
+            QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            image.unlink()
+        except OSError as exc:
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Could not remove image:\n{exc}"
+            )
+            return
+
+        label_file = self._label_path_for_image(image)
+
+        try:
+            if label_file.exists():
+                label_file.unlink()
+        except OSError:
+            pass
+
+        self._thumbnail_cache = {
+            key: value
+            for key, value in self._thumbnail_cache.items()
+            if key[0] != str(image.resolve())
+        }
+
+        self.images = [
+            img for img in self.images
+            if img.resolve() != image.resolve()
+        ]
+
+        self.update_image_page()
+        self.check_uploaded_labels()
+
+    def delete_all_needs_fp_images(self):
+        if not self.needs_fp:
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Remove Images",
+            "Are you sure you want to remove all files that need a First Pass from the project? This action cannot be undone, but you can reupload the videos.",
+            QMessageBox.StandardButton.Yes |
+            QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        for image in self.needs_fp.copy():
+            try:
+                if image.exists():
+                    image.unlink()
+            except OSError:
+                pass
+
+        self.needs_fp.clear()
+        self._needs_fp_set.clear()
+
+        try:
+            self.needs_fp_file.write_text("")
+        except OSError:
+            pass
+
+        self.update_image_page()
+        self.check_uploaded_labels()
 
     def update_pagination_controls(self):
         total_pages = math.ceil(
@@ -313,6 +754,7 @@ class ProjectWindow(QMainWindow):
         self.prev_btn.setEnabled(
             self.current_page > 0
         )
+
         self.next_btn.setEnabled(
             self.current_page < total_pages - 1
         )
@@ -320,138 +762,328 @@ class ProjectWindow(QMainWindow):
     def change_images_per_page(self):
         try:
             value = int(self.image_count_input.text())
-            if value < 1:
-                return
-            self.images_per_page = value
-            self.current_page = 0
-            self.update_image_page()
         except ValueError:
-            pass
+            return
+
+        if value < 1:
+            return
+
+        self.images_per_page = value
+        self.current_page = 0
+        self.update_image_page()
 
     def inspect_img(self, image):
-        print(str(image))
+        image = Path(image)
+
+        if not image.is_file():
+            return
+
         image_list = self.images.copy()
-        if image:
-            self.controller.switch_page(3)
-            self.controller.image_viewer.view_image(image, self.prj_folder, image_list)
+
+        self.controller.switch_page(3)
+        self.controller.image_viewer.view_image(
+            image,
+            self.prj_folder,
+            image_list
+        )
 
     def previous_page(self):
-        if self.current_page > 0:
-            self.current_page -= 1
-            self.update_image_page()
+        if self.current_page <= 0:
+            return
+
+        self.current_page -= 1
+        self.update_image_page()
 
     def next_page(self):
         total_pages = math.ceil(
             len(self.images) / self.images_per_page
         )
 
-        if self.current_page < total_pages - 1:
-            self.current_page += 1
-            self.update_image_page()
+        if self.current_page >= total_pages - 1:
+            return
+
+        self.current_page += 1
+        self.update_image_page()
 
     def clear_img_grid(self):
         while self.scroll_layout.count():
             item = self.scroll_layout.takeAt(0)
+
             if item is None:
                 continue
+
             widget = item.widget()
+
             if widget is not None:
                 widget.deleteLater()
 
     def edit_class_list(self):
         class_file = self.prj_folder / "class_list.txt"
-        class_file.touch()
-        with open(class_file, "r") as f:
-            content = f.read().strip()
-            
-        class_input, ok = QInputDialog().getText(self, "Edit Classes","Type the name of each class separated by a comma:", QLineEdit.EchoMode.Normal, content if content else "")
-        if class_input != "":
-            with open(class_file, "w") as f:
-                f.write(class_input)
-            self.project_classes = class_input.strip().split(',')
-        else:
+        class_file.touch(exist_ok=True)
+
+        try:
+            content = class_file.read_text(errors="ignore").strip()
+        except OSError:
+            content = ""
+
+        class_input, ok = QInputDialog.getText(
+            self,
+            "Edit Classes",
+            "Type the name of each class separated by a comma:",
+            QLineEdit.EchoMode.Normal,
+            content
+        )
+
+        if not ok:
+            return
+
+        if not class_input.strip():
             QMessageBox.warning(
                 self,
-                "",
+                "Invalid Class List",
                 "You must add at least one object class. Simply type 'object' if you only have 1 class."
             )
-            self.edit_class_list()
+            return
+
+        class_file.write_text(class_input)
+
+        self.project_classes = [
+            cls.strip()
+            for cls in class_input.split(",")
+            if cls.strip()
+        ]
 
     def check_uploaded_labels(self):
-        image_uploads = Path(self.prj_folder) / "image_uploads"
-        image_labels = Path(self.prj_folder) / "image_labels"
+        if self._label_thread is not None:
+            return
+
+        image_uploads = self.prj_folder / "image_uploads"
+        image_labels = self.prj_folder / "image_labels"
+
         image_uploads.mkdir(parents=True, exist_ok=True)
         image_labels.mkdir(parents=True, exist_ok=True)
-        self.labels_without_images = []
-        for label in image_labels.iterdir():
-            label_has_corresponding_image = False
-            for image in image_uploads.iterdir():
-                if Path(image).stem == Path(label).stem:
-                    label_has_corresponding_image = True
-                    break
 
-            if not label_has_corresponding_image:
-                self.labels_without_images.append(label)
+        image_paths = [
+            Path(image)
+            for image in self.images
+            if Path(image).is_file()
+        ]
 
-        if len(self.labels_without_images) > 0:
-            self.view_missing_images(self.labels_without_images)
-            self.view_missing_images_list.setEnabled(True)
-        else:
-            self.view_missing_images_list.setEnabled(False)
+        self._label_thread = QThread(self)
+        self._label_worker = ProjectLabelWorker(
+            image_uploads,
+            image_labels,
+            image_paths
+        )
 
-        self.labels_without_images_label.setText(f"Labels missing images: {len(self.labels_without_images)}")
+        self._label_worker.moveToThread(self._label_thread)
+
+        self._label_thread.started.connect(
+            self._label_worker.run
+        )
+
+        self._label_worker.finished.connect(
+            self._labels_checked
+        )
+
+        self._label_worker.failed.connect(
+            self._labels_check_failed
+        )
+
+        self._label_worker.finished.connect(
+            self._label_thread.quit
+        )
+
+        self._label_worker.failed.connect(
+            self._label_thread.quit
+        )
+
+        self._label_thread.finished.connect(
+            self._label_thread_finished
+        )
+
+        self._label_thread.start()
+
+    @Slot(object, object)
+    def _labels_checked(self, image_label_paths, unmatched_labels):
+        self.labels_without_images = [
+            Path(label)
+            for label in unmatched_labels
+            if Path(label).is_file()
+        ]
+
+        self.view_missing_images_list.setEnabled(
+            bool(self.labels_without_images)
+        )
+
+        self.labels_without_images_label.setText(
+            f"Labels missing images: {len(self.labels_without_images)}"
+        )
+
+    @Slot(str)
+    def _labels_check_failed(self, error):
+        print(f"[ProjectLabelWorker] Error: {error}")
+
+        self.labels_without_images.clear()
+        self.view_missing_images_list.setEnabled(False)
+        self.labels_without_images_label.setText(
+            "Labels missing images: 0"
+        )
+
+    def _label_thread_finished(self):
+        worker = self._label_worker
+        thread = self._label_thread
+
+        self._label_worker = None
+        self._label_thread = None
+
+        if worker is not None:
+            worker.deleteLater()
+
+        if thread is not None:
+            thread.deleteLater()
 
     def view_missing_images(self, labels):
-        labels_str = "\n".join([str(label.name) for label in labels])
+        labels_str = "\n".join(
+            str(label)
+            for label in labels
+        )
+
         msg = QMessageBox(self)
         msg.setWindowTitle("Warning")
-        msg.setText("The following labels do not have corresponding images.")
+        msg.setText(
+            "The following labels do not have corresponding images."
+        )
         msg.setInformativeText(
-            "Please upload the images that correspond (with the same file name, e.g., image.jpg and image.txt) in order to view the label information."
+            "Please upload the images that correspond with these labels."
         )
         msg.setDetailedText(labels_str)
-        msg.setStandardButtons(QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel)
-        delete_button = msg.addButton("Delete these files", QMessageBox.ButtonRole.ActionRole)
-        msg.setDefaultButton(QMessageBox.StandardButton.Ok)
+        msg.setStandardButtons(
+            QMessageBox.StandardButton.Ok |
+            QMessageBox.StandardButton.Cancel
+        )
+
+        delete_button = msg.addButton(
+            "Delete these files",
+            QMessageBox.ButtonRole.ActionRole
+        )
+
+        msg.setDefaultButton(
+            QMessageBox.StandardButton.Ok
+        )
+
         msg.exec()
-        if msg.clickedButton() == delete_button:
-            for label in labels:
-                try:
-                    lbl = Path(label)
-                    if lbl.is_dir():
-                        for txt_label in lbl.rglob("*.txt"):
-                            if txt_label.is_file():
-                                txt_label.unlink()
-                        directories = sorted(
-                            (path for path in lbl.rglob("*") if path.is_dir()),
-                            key=lambda path: len(path.parts),
-                            reverse=True,
-                        )
-                        for directory in directories:
+
+        if msg.clickedButton() != delete_button:
+            return
+
+        for label in labels:
+            try:
+                label = Path(label)
+
+                if label.is_file():
+                    label.unlink()
+
+                elif label.is_dir():
+                    for path in sorted(
+                        label.rglob("*"),
+                        key=lambda p: len(p.parts),
+                        reverse=True
+                    ):
+                        if path.is_file():
+                            path.unlink()
+                        elif path.is_dir():
                             try:
-                                directory.rmdir()
+                                path.rmdir()
                             except OSError:
                                 pass
-                        try:
-                            lbl.rmdir()
-                        except OSError:
-                            pass
-                    elif lbl.exists():
-                        lbl.unlink()
-                except OSError:
-                    pass
-            self.labels_without_images = []
-            self.check_uploaded_labels()
-            self.view_missing_images_list.setEnabled(False)
+
+                    try:
+                        label.rmdir()
+                    except OSError:
+                        pass
+
+            except OSError:
+                pass
+
+        self.labels_without_images.clear()
+        self.check_uploaded_labels()
+
+    def get_thumbnail(self, image, width, height):
+        image = Path(image).resolve()
+        key = (str(image), width, height)
+
+        cached = self._thumbnail_cache.get(key)
+        if cached is not None:
+            return cached
+
+        pixmap = QPixmap(str(image))
+
+        if pixmap.isNull():
+            return QPixmap()
+
+        thumbnail = pixmap.scaled(
+            width,
+            height,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation
+        )
+
+        if len(self._thumbnail_cache) >= 500:
+            self._thumbnail_cache.clear()
+
+        self._thumbnail_cache[key] = thumbnail
+        return thumbnail
+
+    def _update_after_resize(self):
+        self._grid_update_pending = False
+
+        if self._loading_project:
+            return
+
+        if not self.isVisible():
+            return
+
+        width = self.scroll_imgs.viewport().width()
+
+        if width <= 0:
+            return
+
+        if width == self._last_grid_width:
+            return
+
+        self._last_grid_width = width
+        self.update_image_page()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
 
-        if self.images:
-            self.update_image_page()
+        if self._loading_project:
+            return
+
+        if not self.images and not self.needs_fp:
+            return
+
+        self._resize_timer.start()
 
     def logout_clear(self):
+        self._resize_timer.stop()
+
+        if self._load_thread is not None:
+            self._load_thread.quit()
+            self._load_thread.wait(1000)
+
+        if self._label_thread is not None:
+            self._label_thread.quit()
+            self._label_thread.wait(1000)
+
+        self._load_thread = None
+        self._load_worker = None
+        self._label_thread = None
+        self._label_worker = None
+
         self.clear_img_grid()
+        self._thumbnail_cache.clear()
 
         self.username = ""
         self.user_folder = Path(INSTALL_LOCATION)
@@ -459,8 +1091,22 @@ class ProjectWindow(QMainWindow):
         self.images_per_page = 16
         self.current_page = 0
         self.needs_fp.clear()
+        self._needs_fp_set.clear()
         self.needs_fp_file = Path(INSTALL_LOCATION)
         self.project_classes.clear()
         self.labels_without_images.clear()
-        self.current_project = ""
+        self.current_project = Path(INSTALL_LOCATION)
+        self.prj_folder = Path(INSTALL_LOCATION)
         self.uuid = ""
+
+        self._loading_project = False
+
+        self.loading_label.hide()
+        self.show_user.setText("")
+        self.show_project.setText("")
+        self.show_uuid.setText("")
+        self.page_lbl.setText("Page 0 of 0")
+        self.labels_without_images_label.setText(
+            "Labels missing images: 0"
+        )
+        self.view_missing_images_list.setEnabled(False)
