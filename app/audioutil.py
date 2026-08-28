@@ -1,5 +1,6 @@
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaDevices
 from PySide6.QtCore import QUrl, Qt
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QWidget, QPushButton, QHBoxLayout, QLabel, QVBoxLayout, QSlider
 import random
 import time
@@ -24,7 +25,10 @@ class MusicHandler(QWidget):
         self.musicdir = musicdir
         self.looping = False
 
-        self.play_button = QPushButton("Play")
+        self.play_button = QPushButton()
+        self.play_button_icon = QPixmap(str(Path(INSTALL_LOCATION) / "assets" / "app_pics" / "play_button.webp"))
+        self.pause_button_icon = QPixmap(str(Path(INSTALL_LOCATION) / "assets" / "app_pics" / "pause_button.png"))
+        self.play_button.setIcon(self.play_button_icon)
         self.skip_button = QPushButton("Skip Song")
         self.prev_song_button = QPushButton("Previous Song")
         self.prev_song_button.setEnabled(False)
@@ -94,11 +98,11 @@ class MusicHandler(QWidget):
     def play_or_pause(self):
         self.em_pause = False
         if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
-            self.play_button.setText("Paused")
+            self.play_button.setIcon(self.play_button_icon)
             self.player.pause()
             #print("Pausing")
         else:
-            self.play_button.setText("Play")
+            self.play_button.setIcon(self.pause_button_icon)
             self.player.play()
             #print("Playing")
 

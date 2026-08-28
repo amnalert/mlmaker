@@ -1,51 +1,11 @@
-from PySide6.QtWidgets import (
-    QApplication,
-    QWidget,
-    QGridLayout,
-    QPushButton,
-    QLabel,
-    QHBoxLayout,
-    QVBoxLayout,
-    QSizePolicy,
-    QMessageBox,
-    QScrollArea,
-    QComboBox,
-    QInputDialog,
-    QDialog,
-)
-from PySide6.QtCore import (
-    Qt,
-    QPoint,
-    QEvent,
-    QRectF,
-    QDir,
-    Slot,
-)
-from PySide6.QtGui import (
-    QPainter,
-    QPixmap,
-    QFont,
-    QKeyEvent,
-    QPen,
-    QColor,
-    QPalette,
-    QImageReader,
-    QGuiApplication,
-    QColorSpace,
-    QAction,
-    QImageWriter,
-)
+from PySide6.QtWidgets import QApplication, QWidget, QGridLayout, QPushButton, QLabel, QHBoxLayout, QVBoxLayout, QSizePolicy, QMessageBox, QScrollArea, QComboBox, QInputDialog, QDialog
+from PySide6.QtCore import Qt, QPoint, QEvent, QRectF, QDir, Slot
+from PySide6.QtGui import QPainter, QPixmap, QFont, QKeyEvent, QPen, QColor, QPalette, QImageReader, QGuiApplication, QColorSpace, QAction, QImageWriter
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from pathlib import Path
-import shutil
-
+import shutil, json
 
 INSTALL_LOCATION = Path(__file__).resolve().parent.parent
-
-
-# ======================================================================
-# IMAGE CONTAINER
-# ======================================================================
 
 class ImageContainer(QWidget):
     def __init__(self, annotating, parents, controller):
@@ -61,10 +21,6 @@ class ImageContainer(QWidget):
         self.image_label_file = ""
         self.default_class = "none"
 
-        # --------------------------------------------------------------
-        # Main layout
-        # --------------------------------------------------------------
-
         main_layout = QHBoxLayout(self)
 
         # Fonts
@@ -76,10 +32,6 @@ class ImageContainer(QWidget):
         self.pt16.setPointSize(16)
         self.pt8.setPointSize(8)
 
-        # --------------------------------------------------------------
-        # Image area
-        # --------------------------------------------------------------
-
         imglayout = QVBoxLayout()
         belowimglayout = QHBoxLayout()
 
@@ -88,232 +40,74 @@ class ImageContainer(QWidget):
 
         main_layout.addLayout(imglayout, 5)
 
-        # --------------------------------------------------------------
-        # Back/Menu button
-        # --------------------------------------------------------------
-
         if self.annotating:
             self.back_button = QPushButton("Back")
-
-            self.back_button.clicked.connect(
-                lambda: (self.controller.switch_page(2), self.parents.load_saved_images(self.project, self.parents.username, self.parents.uuid))
-            )
-
+            self.back_button.clicked.connect(lambda: (self.controller.switch_page(2), self.parents.load_saved_images(self.project, self.parents.username, self.parents.uuid)))
         else:
             self.back_button = QPushButton("Menu")
-
-            self.back_button.clicked.connect(
-                self.parents.menu_dialog.show
-            )
+            self.back_button.clicked.connect(self.parents.menu_dialog.show)
 
         self.back_button.setFixedHeight(40)
         self.back_button.setFixedWidth(120)
-
-        belowimglayout.addWidget(
-            self.back_button,
-            alignment=(
-                Qt.AlignmentFlag.AlignBottom |
-                Qt.AlignmentFlag.AlignLeft
-            )
-        )
-
-        # --------------------------------------------------------------
-        # Image index
-        # --------------------------------------------------------------
+        belowimglayout.addWidget(self.back_button, alignment=(Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignLeft))
 
         self.img_index = 0
-
         self.img_index_lbl = QLabel("Image: 0/0")
         self.img_index_lbl.setFont(self.pt8)
-
-        belowimglayout.addWidget(
-            self.img_index_lbl,
-            alignment=(
-                Qt.AlignmentFlag.AlignBottom |
-                Qt.AlignmentFlag.AlignHCenter
-            )
-        )
-
-        # --------------------------------------------------------------
-        # Image viewer
-        # --------------------------------------------------------------
+        belowimglayout.addWidget(self.img_index_lbl, alignment=(Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter))
 
         self.image_viewer = ImageViewer(self)
-
-        imglayout.addWidget(
-            self.image_viewer,
-            stretch=1
-        )
+        imglayout.addWidget(self.image_viewer, stretch=1)
 
         self.image_label = self.image_viewer.image_label
         self.image_scroll_area = self.image_viewer.scroll_area
 
-        # --------------------------------------------------------------
-        # First pass UI
-        # --------------------------------------------------------------
-
         if not self.annotating:
-
             self.autoskip_lbl = QLabel("Autoskip: True")
-
-            belowimglayout.addWidget(
-                self.autoskip_lbl,
-                alignment=(
-                    Qt.AlignmentFlag.AlignBottom |
-                    Qt.AlignmentFlag.AlignRight
-                )
-            )
+            belowimglayout.addWidget(self.autoskip_lbl, alignment=(Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight))
 
             self.mark_status = QLabel()
             self.mark_status.setFixedSize(50, 50)
 
-            self.mark_status.setStyleSheet(
-                "background-color: gray; border: 1px solid black;"
-            )
-
-            belowimglayout.addWidget(
-                self.mark_status,
-                alignment=(
-                    Qt.AlignmentFlag.AlignBottom |
-                    Qt.AlignmentFlag.AlignRight
-                )
-            )
+            self.mark_status.setStyleSheet("background-color: gray; border: 1px solid black;")
+            belowimglayout.addWidget(self.mark_status, alignment=(Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight))
 
             self.image_name = QLabel("parent/child.jpg")
-
-            belowimglayout.addWidget(
-                self.image_name,
-                alignment=Qt.AlignmentFlag.AlignRight
-            )
-
-        # --------------------------------------------------------------
-        # Annotation UI
-        # --------------------------------------------------------------
+            belowimglayout.addWidget(self.image_name, alignment=Qt.AlignmentFlag.AlignRight)
 
         else:
-
-            # IMPORTANT:
-            #
-            # ImageLabellingControls is now a direct child of image_label.
-            #
-            # This means:
-            #
-            # ImageViewer
-            #   QScrollArea
-            #     image_label
-            #       ImageLabellingControls
-            #
-            # Both the image and overlay therefore use exactly the same
-            # coordinate system.
-            #
-            self.img_labelling_controls = ImageLabellingControls(
-                self.image_viewer.image_label,
-                self.image_viewer,
-                self
-            )
-
-            self.img_labelling_controls.setObjectName(
-                "image_annotation_overlay"
-            )
-
-            self.img_labelling_controls.setGeometry(
-                0,
-                0,
-                self.image_viewer.image_label.width(),
-                self.image_viewer.image_label.height()
-            )
-
+            self.img_labelling_controls = ImageLabellingControls(self.image_viewer.image_label, self.image_viewer, self)
+            self.img_labelling_controls.setObjectName("image_annotation_overlay")
+            self.img_labelling_controls.setGeometry(0, 0, self.image_viewer.image_label.width(), self.image_viewer.image_label.height())
             self.img_labelling_controls.raise_()
             self.img_labelling_controls.show()
 
             # References to annotation controls
-            self.image_name = (
-                self.img_labelling_controls.image_name
-            )
+            self.image_name = self.img_labelling_controls.image_name
+            self.box_label_1 = self.img_labelling_controls.box_label_1
+            self.box_label_2 = self.img_labelling_controls.box_label_2
+            self.mouse_pos_label = self.img_labelling_controls.mouse_pos_label
+            self.scroll_boxes = self.img_labelling_controls.scroll_boxes
+            self.change_default_class_btn = self.img_labelling_controls.change_default_class_btn
+            self.show_all_boxes_btn = self.img_labelling_controls.show_all_boxes_btn
 
-            self.box_label_1 = (
-                self.img_labelling_controls.box_label_1
-            )
-
-            self.box_label_2 = (
-                self.img_labelling_controls.box_label_2
-            )
-
-            self.mouse_pos_label = (
-                self.img_labelling_controls.mouse_pos_label
-            )
-
-            self.scroll_boxes = (
-                self.img_labelling_controls.scroll_boxes
-            )
-
-            self.change_default_class_btn = (
-                self.img_labelling_controls.change_default_class_btn
-            )
-
-            self.show_all_boxes_btn = (
-                self.img_labelling_controls.show_all_boxes_btn
-            )
-
-            # ----------------------------------------------------------
-            # Right-side UI
-            # ----------------------------------------------------------
+            self.annotation_type = self.img_labelling_controls.annotation_type
+            self.annotation_type_label = self.img_labelling_controls.annotation_type_label
+            self.change_annotation_type = self.img_labelling_controls.change_annotation_type
 
             right_layout = QVBoxLayout()
             main_layout.addLayout(right_layout, 1)
 
-            right_layout.addWidget(
-                self.image_name,
-                alignment=(
-                    Qt.AlignmentFlag.AlignTop |
-                    Qt.AlignmentFlag.AlignHCenter
-                )
-            )
+            right_layout.addWidget(self.image_name, alignment=(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter))
+            right_layout.addWidget(self.box_label_1, alignment=(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter))
+            right_layout.addWidget(self.box_label_2, alignment=(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter))
+            right_layout.addWidget(self.mouse_pos_label, alignment=(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter))
+            right_layout.addWidget(self.scroll_boxes, stretch=1)
+            right_layout.addWidget(self.change_default_class_btn)
+            right_layout.addWidget(self.show_all_boxes_btn, alignment=(Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter))
 
-            right_layout.addWidget(
-                self.box_label_1,
-                alignment=(
-                    Qt.AlignmentFlag.AlignTop |
-                    Qt.AlignmentFlag.AlignHCenter
-                )
-            )
-
-            right_layout.addWidget(
-                self.box_label_2,
-                alignment=(
-                    Qt.AlignmentFlag.AlignTop |
-                    Qt.AlignmentFlag.AlignHCenter
-                )
-            )
-
-            right_layout.addWidget(
-                self.mouse_pos_label,
-                alignment=(
-                    Qt.AlignmentFlag.AlignTop |
-                    Qt.AlignmentFlag.AlignHCenter
-                )
-            )
-
-            right_layout.addWidget(
-                self.scroll_boxes,
-                stretch=1
-            )
-
-            right_layout.addWidget(
-                self.change_default_class_btn
-            )
-
-            right_layout.addWidget(
-                self.show_all_boxes_btn,
-                alignment=(
-                    Qt.AlignmentFlag.AlignBottom |
-                    Qt.AlignmentFlag.AlignHCenter
-                )
-            )
-
-    # ==================================================================
-    # VIEW IMAGE
-    # ==================================================================
+            right_layout.addWidget(self.annotation_type_label, alignment=(Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight))
+            right_layout.addWidget(self.change_annotation_type, alignment=(Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight))
 
     def view_image(self, img, prj, img_list):
 
@@ -330,10 +124,6 @@ class ImageContainer(QWidget):
             f"{self.current_image.parent.name}/"
             f"{self.current_image.name}"
         )
-
-        # --------------------------------------------------------------
-        # Annotation information
-        # --------------------------------------------------------------
 
         if self.annotating:
 
@@ -369,26 +159,14 @@ class ImageContainer(QWidget):
             f"Image: {self.img_index + 1}/{len(self.images)}"
         )
 
-        # --------------------------------------------------------------
-        # Load image
-        # --------------------------------------------------------------
-
         self.image_viewer.load_file(
             str(self.current_image)
         )
-
-        # --------------------------------------------------------------
-        # Load saved boxes
-        # --------------------------------------------------------------
 
         if self.annotating:
             self.img_labelling_controls.load_saved_boxes(
                 self.image_label_file
             )
-
-    # ==================================================================
-    # FIRST PASS MARK STATUS
-    # ==================================================================
 
     def set_mark_status(self, status):
 
@@ -410,11 +188,6 @@ class ImageContainer(QWidget):
                 "background-color: gray; border: 1px solid black;"
             )
 
-
-# ======================================================================
-# FIRST PASS
-# ======================================================================
-
 class FirstPass(QWidget):
 
     def __init__(self, controller):
@@ -428,17 +201,9 @@ class FirstPass(QWidget):
             Qt.FocusPolicy.StrongFocus
         )
 
-        # --------------------------------------------------------------
-        # Fonts
-        # --------------------------------------------------------------
-
         self.pt32b = QFont()
         self.pt32b.setBold(True)
         self.pt32b.setPointSize(32)
-
-        # --------------------------------------------------------------
-        # Controls information
-        # --------------------------------------------------------------
 
         self.controls_dialog = QLabel(
             """
@@ -475,10 +240,6 @@ class FirstPass(QWidget):
         self.ctrls.setStyleSheet(
             "QLabel { min-width: 750px; min-height: 150px; }"
         )
-
-        # --------------------------------------------------------------
-        # First pass menu
-        # --------------------------------------------------------------
 
         self.menu_dialog = QWidget(
             self,
@@ -584,10 +345,6 @@ class FirstPass(QWidget):
 
         self.menu_dialog.hide()
 
-        # --------------------------------------------------------------
-        # Image view
-        # --------------------------------------------------------------
-
         self.image_view = ImageContainer(
             False,
             self,
@@ -601,10 +358,6 @@ class FirstPass(QWidget):
             stretch=1
         )
 
-        # --------------------------------------------------------------
-        # Remaining images
-        # --------------------------------------------------------------
-
         self.imgs_remaining_lbl = QLabel(
             "Unmarked frames: 0"
         )
@@ -616,10 +369,6 @@ class FirstPass(QWidget):
                 Qt.AlignmentFlag.AlignBottom
             )
         )
-
-        # --------------------------------------------------------------
-        # Internal state
-        # --------------------------------------------------------------
 
         self.current_project = Path(
             INSTALL_LOCATION
@@ -644,84 +393,42 @@ class FirstPass(QWidget):
         self.needs_fp_file = Path(
             INSTALL_LOCATION
         )
-
-    # ==================================================================
-    # KEYBOARD
-    # ==================================================================
-
     def keyPressEvent(self, event: QKeyEvent):
 
         if event.key() == Qt.Key.Key_Escape:
-
             self.menu_dialog.show()
 
         elif event.key() == Qt.Key.Key_Period:
-
-            self.mark_save(
-                self.current_img_index
-            )
+            self.mark_save(self.current_img_index)
 
         elif event.key() == Qt.Key.Key_Comma:
-
-            self.mark_delete(
-                self.current_img_index
-            )
+            self.mark_delete(self.current_img_index)
 
         elif event.key() == Qt.Key.Key_X:
-
             self.next_img()
 
         elif event.key() == Qt.Key.Key_Z:
-
             self.prev_img()
 
         elif event.key() == Qt.Key.Key_C:
-
             self.auto_skip = not self.auto_skip
-
-            self.image_view.autoskip_lbl.setText(
-                f"Autoskip: {self.auto_skip}"
-            )
+            self.image_view.autoskip_lbl.setText(f"Autoskip: {self.auto_skip}")
 
         elif event.key() == Qt.Key.Key_V:
-
             self.display_controls()
 
         elif event.key() == Qt.Key.Key_Return:
-
             if len(self.unmarked_imgs) > 0:
-
-                unmarked_str = "\n".join(
-                    [
-                        str(frame.name)
-                        for frame in self.unmarked_imgs
-                    ]
-                )
+                unmarked_str = "\n".join( [ str(frame.name) for frame in self.unmarked_imgs ] )
 
                 msg = QMessageBox(self)
-
                 msg.setWindowTitle("Notice")
+                msg.setText("The following frames have not been marked yet.")
+                msg.setInformativeText("Please go back and mark them or choose from one of the following other options:")
+                msg.setDetailedText(unmarked_str)
+                msg.setStandardButtons(QMessageBox.StandardButton.Ok)
 
-                msg.setText(
-                    "The following frames have not been marked yet."
-                )
-
-                msg.setInformativeText(
-                    "Please go back and mark them or choose from one of the following other options:"
-                )
-
-                msg.setDetailedText(
-                    unmarked_str
-                )
-
-                msg.setStandardButtons(
-                    QMessageBox.StandardButton.Ok
-                )
-
-                delete_button = msg.addButton(
-                    "Mark frames for Deletion",
-                    QMessageBox.ButtonRole.ActionRole
-                )
+                delete_button = msg.addButton("Mark frames for Deletion", QMessageBox.ButtonRole.ActionRole)
 
                 save_button = msg.addButton(
                     "Mark frames for Saving",
@@ -752,158 +459,76 @@ class FirstPass(QWidget):
 
                 self.finish_and_delete()
 
-    # ==================================================================
-    # CONTROLS
-    # ==================================================================
-
     def display_controls(self):
         self.ctrls.exec()
 
-    # ==================================================================
-    # BEGIN PASS
-    # ==================================================================
-
-    def begin_pass(
-        self,
-        needs_fp,
-        prj,
-        user,
-        uuid
-    ):
-
+    def begin_pass(self, needs_fp, prj, user, uuid):
         self.current_user = user
         self.current_uuid = uuid
 
         self.setFocus()
         self.activateWindow()
 
-        self.needs_fp_file = (
-            Path(prj) / "needs_first_pass.txt"
-        )
+        self.needs_fp_file = Path(prj) / "needs_first_pass.txt"
 
         if len(needs_fp) == 0:
-
             self.controller.switch_page(2)
             return
 
         self.all_input_imgs = needs_fp.copy()
         self.unmarked_imgs = needs_fp.copy()
 
-        self.imgs_remaining_lbl.setText(
-            f"Unmarked frames: {len(self.unmarked_imgs)}"
-        )
+        self.imgs_remaining_lbl.setText(f"Unmarked frames: {len(self.unmarked_imgs)}")
 
         self.current_project = prj
-
         self.ctrls.exec()
-
         self.show_img(0)
 
-    # ==================================================================
-    # MARK ALL
-    # ==================================================================
-
-    def mark_all(
-        self,
-        remaining_imgs,
-        option
-    ):
+    def mark_all(self, remaining_imgs, option):
 
         if option == "delete":
-
-            self.marked_del.extend(
-                remaining_imgs
-            )
-
+            self.marked_del.extend(remaining_imgs)
         else:
-
-            self.marked_save.extend(
-                remaining_imgs
-            )
+            self.marked_save.extend(remaining_imgs)
 
         self.unmarked_imgs.clear()
-
         self.update_ui()
 
-    # ==================================================================
-    # MARK DELETE
-    # ==================================================================
-
     def mark_delete(self, img_idx):
-
         img = self.all_input_imgs[img_idx]
-
         if img in self.marked_save:
             self.marked_save.remove(img)
-
         if img not in self.marked_del:
             self.marked_del.append(img)
-
         if img in self.unmarked_imgs:
             self.unmarked_imgs.remove(img)
 
-        if (
-            len(self.unmarked_imgs) > 0
-            and self.auto_skip
-            and self.current_img_index <
-                (len(self.all_input_imgs) - 1)
-        ):
-
-            self.show_img(
-                self.current_img_index + 1
-            )
+        if (len(self.unmarked_imgs) > 0 and self.auto_skip and self.current_img_index < (len(self.all_input_imgs) - 1)):
+            self.show_img(self.current_img_index + 1)
 
         else:
-
-            self.show_img(
-                self.current_img_index
-            )
+            self.show_img(self.current_img_index)
 
         self.update_ui()
-
-    # ==================================================================
-    # MARK SAVE
-    # ==================================================================
 
     def mark_save(self, img_idx):
 
         img = self.all_input_imgs[img_idx]
-
         if img in self.marked_del:
             self.marked_del.remove(img)
-
         if img not in self.marked_save:
             self.marked_save.append(img)
-
         if img in self.unmarked_imgs:
             self.unmarked_imgs.remove(img)
+        self.image_view.set_mark_status("save")
 
-        self.image_view.set_mark_status(
-            "save"
-        )
-
-        if (
-            len(self.unmarked_imgs) > 0
-            and self.auto_skip
-            and self.current_img_index <
-                (len(self.all_input_imgs) - 1)
-        ):
-
-            self.show_img(
-                self.current_img_index + 1
-            )
+        if (len(self.unmarked_imgs) > 0 and self.auto_skip and self.current_img_index < (len(self.all_input_imgs) - 1)):
+            self.show_img(self.current_img_index + 1)
 
         else:
-
-            self.show_img(
-                self.current_img_index
-            )
+            self.show_img(self.current_img_index)
 
         self.update_ui()
-
-    # ==================================================================
-    # SHOW IMAGE
-    # ==================================================================
 
     def show_img(self, index):
 
@@ -935,10 +560,6 @@ class FirstPass(QWidget):
             self.all_input_imgs
         )
 
-    # ==================================================================
-    # NEXT IMAGE
-    # ==================================================================
-
     def next_img(self):
 
         if self.current_img_index < (
@@ -951,10 +572,6 @@ class FirstPass(QWidget):
 
         self.update_ui()
 
-    # ==================================================================
-    # PREVIOUS IMAGE
-    # ==================================================================
-
     def prev_img(self):
 
         if self.current_img_index >= 1:
@@ -964,10 +581,6 @@ class FirstPass(QWidget):
             )
 
         self.update_ui()
-
-    # ==================================================================
-    # CANCEL VIDEO
-    # ==================================================================
 
     def cancel_this_video(self):
 
@@ -997,10 +610,6 @@ class FirstPass(QWidget):
 
         self.update_ui()
 
-    # ==================================================================
-    # DISCARD AND QUIT
-    # ==================================================================
-
     def discard_and_quit(self):
 
         reply = QMessageBox.question(
@@ -1016,10 +625,6 @@ class FirstPass(QWidget):
         if reply == QMessageBox.StandardButton.Yes:
 
             self.return_to_project()
-
-    # ==================================================================
-    # UPDATE UI
-    # ==================================================================
 
     def update_ui(self):
 
@@ -1044,131 +649,59 @@ class FirstPass(QWidget):
                 "All frames marked! Press Enter to confirm selection."
             )
 
-    # ==================================================================
-    # SAVE AND QUIT
-    # ==================================================================
-
     def save_and_quit(self):
 
         reply = QMessageBox.question(
             self,
             "Delete and Quit",
-            "Are you sure you want to remove these frames "
-            "from the project? They will be gone forever "
-            "unless the whole video is reuploaded.",
-            QMessageBox.StandardButton.Yes |
-            QMessageBox.StandardButton.No,
+            "Are you sure you want to remove these frames from the project? They will be gone forever unless the whole video is reuploaded. Frames marked for saving will be saved as well.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )
 
         if reply == QMessageBox.StandardButton.Yes:
-
             self.delete_frames()
             self.return_to_project()
-
-    # ==================================================================
-    # FINISH AND DELETE
-    # ==================================================================
 
     def finish_and_delete(self):
 
-        for_deletion_str = "\n".join(
-            [
-                str(img)
-                for img in self.marked_del
-            ]
-        )
+        for_deletion_str = "\n".join( [str(img) for img in self.marked_del] )
 
         msg = QMessageBox(self)
-
-        msg.setWindowTitle(
-            "Delete and Finish"
-        )
-
-        msg.setText(
-            "Are you sure you want to remove the marked "
-            "for deletion frames from the project?"
-        )
-
-        msg.setInformativeText(
-            "These images will be gone unless the video is reuploaded."
-        )
-
-        msg.setDetailedText(
-            for_deletion_str
-        )
-
-        msg.setStandardButtons(
-            QMessageBox.StandardButton.Yes |
-            QMessageBox.StandardButton.Cancel
-        )
-
-        msg.setDefaultButton(
-            QMessageBox.StandardButton.Cancel
-        )
-
+        msg.setWindowTitle("Delete and Finish")
+        msg.setText("Are you sure you want to remove the marked for deletion frames from the project?")
+        msg.setInformativeText("These images will be gone unless the video is reuploaded.")
+        msg.setDetailedText(for_deletion_str)
+        msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
+        msg.setDefaultButton(QMessageBox.StandardButton.Cancel)
         reply = msg.exec()
-
         if reply == QMessageBox.StandardButton.Yes:
-
             self.delete_frames()
             self.return_to_project()
 
-    # ==================================================================
-    # DELETE VIDEO
-    # ==================================================================
-
     def delete_video(self, video_frames):
-
-        lines = (
-            self.needs_fp_file
-            .read_text()
-            .strip()
-            .splitlines()
-        )
-
-        video_paths = {
-            Path(img)
-            .resolve()
-            .relative_to(
-                self.current_project.resolve()
-            )
-            .as_posix()
-            for img in video_frames
-        }
-
-        lines = [
-            line
-            for line in lines
-            if Path(line).as_posix()
-            not in video_paths
-        ]
-
-        try:
-
-            shutil.rmtree(
-                self.current_video
-            )
-
-        except OSError:
-
-            pass
-
-    # ==================================================================
-    # DELETE FRAMES
-    # ==================================================================
-
-    def delete_frames(self):
 
         lines = (self.needs_fp_file.read_text().strip().splitlines())
 
-        marked = (self.marked_del + self.marked_save)
+        video_paths = { Path(img).resolve().relative_to(self.current_project.resolve()).as_posix() for img in video_frames }
 
+        lines = [
+            line for line in lines if Path(line).as_posix() not in video_paths
+        ]
+
+        try:
+            shutil.rmtree(self.current_video)
+        except OSError:
+            pass
+
+
+    def delete_frames(self):
+        lines = (self.needs_fp_file.read_text().strip().splitlines())
+        marked = (self.marked_del + self.marked_save)
         marked_paths = { Path(img).resolve().relative_to(self.current_project.resolve()).as_posix() for img in marked }
 
         lines = [
-            line for line in lines
-            if Path(line).as_posix() not in marked_paths
+            line for line in lines if Path(line).as_posix() not in marked_paths
         ]
 
         self.needs_fp_file.write_text("\n".join(lines))
@@ -1178,7 +711,6 @@ class FirstPass(QWidget):
 
         for img in self.marked_del:
             img = Path(img)
-
             try:
                 relative_img = img.resolve().relative_to(image_uploads.resolve())
                 label_file = image_labels / relative_img.parent / f"{relative_img.stem}.txt"
@@ -1194,10 +726,6 @@ class FirstPass(QWidget):
 
         self.marked_del.clear()
 
-    # ==================================================================
-    # RETURN TO PROJECT
-    # ==================================================================
-
     def return_to_project(self):
 
         self.all_input_imgs.clear()
@@ -1207,38 +735,16 @@ class FirstPass(QWidget):
 
         self.controller.switch_page(2)
 
-        self.controller.home.load_saved_images(
-            self.current_project,
-            self.current_user,
-            self.current_uuid
-        )
-
-    # ==================================================================
-    # CLOSE EVENT
-    # ==================================================================
+        self.controller.home.load_saved_images(self.current_project, self.current_user, self.current_uuid)
 
     def closeEvent(self, event):
+        self.needs_fp_file.write_text("\n".join( [str(img) for img in self.all_input_imgs] ))
 
-        self.needs_fp_file.write_text(
-            "\n".join(
-                [
-                    str(img)
-                    for img in self.all_input_imgs
-                ]
-            )
-        )
-
-        if (
-            len(self.marked_del) > 0
-            or len(self.marked_save) > 0
-        ):
-
+        if len(self.marked_del) > 0 or len(self.marked_save) > 0:
             reply = QMessageBox.question(
                 self,
                 "Exit First Pass",
-                "You have marked frames for deletion or saving. "
-                "Are you sure you want to exit? "
-                "Your choices will be lost.",
+                "You have marked frames for deletion or saving. Are you sure you want to exit? Your choices will be lost.",
                 QMessageBox.StandardButton.Yes |
                 QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No
@@ -1246,287 +752,133 @@ class FirstPass(QWidget):
 
             if reply == QMessageBox.StandardButton.Yes:
                 self.hide()
-
                 event.accept()
-
             else:
-
                 event.ignore()
-
         else:
-
             event.accept()
-
-
-# ======================================================================
-# IMAGE LABELLING CONTROLS
-# ======================================================================
 
 class ImageLabellingControls(QWidget):
 
-    def __init__(
-        self,
-        parent_label,
-        image_viewer,
-        parents
-    ):
-
-        # IMPORTANT:
-        #
-        # parent_label is now the actual QLabel containing the image.
-        #
-        # This means this widget and the image use identical coordinates.
-        #
+    def __init__(self, parent_label, image_viewer, parents):
         super().__init__(parent_label)
 
         self.image_viewer = image_viewer
         self.parent_label = parent_label
         self.parents = parents
 
-        # --------------------------------------------------------------
-        # Image/project information
-        # --------------------------------------------------------------
-
+        # Image info
         self.image_label_file = ""
         self.species = []
         self.project = ""
 
-        # --------------------------------------------------------------
         # Crosshair colors
-        # --------------------------------------------------------------
-
-        self.colors = [
-            Qt.GlobalColor.white,
-            Qt.GlobalColor.red,
-            Qt.GlobalColor.darkRed,
-            Qt.GlobalColor.green,
-            Qt.GlobalColor.darkGreen,
-            Qt.GlobalColor.blue,
-            Qt.GlobalColor.darkBlue,
-            Qt.GlobalColor.cyan,
-            Qt.GlobalColor.darkCyan,
-            Qt.GlobalColor.magenta,
-            Qt.GlobalColor.darkMagenta,
-            Qt.GlobalColor.yellow,
-            Qt.GlobalColor.darkYellow,
-            Qt.GlobalColor.lightGray,
-            Qt.GlobalColor.gray,
-            Qt.GlobalColor.darkGray,
-            Qt.GlobalColor.black,
-        ]
-
+        self.colors = [Qt.GlobalColor.white,Qt.GlobalColor.red,Qt.GlobalColor.darkRed,Qt.GlobalColor.green,Qt.GlobalColor.darkGreen,Qt.GlobalColor.blue,Qt.GlobalColor.darkBlue,Qt.GlobalColor.cyan,Qt.GlobalColor.darkCyan,Qt.GlobalColor.magenta,Qt.GlobalColor.darkMagenta,Qt.GlobalColor.yellow,Qt.GlobalColor.darkYellow,Qt.GlobalColor.lightGray,Qt.GlobalColor.gray,Qt.GlobalColor.darkGray,Qt.GlobalColor.black,]
         self.color_index = 0
 
-        # --------------------------------------------------------------
-        # Box variables
-        # --------------------------------------------------------------
-
+        # Boxes
         self.boxes_lines = []
-
-        self.current_box = [
-            (-1, -1),
-            (-1, -1)
-        ]
-
+        self.current_box = [ (-1, -1), (-1, -1) ]
+        self.sam_points = [] # At least 3 points are required
         self.default_class = "none"
-
         self.hovered_box_label = None
-
         self.showing_all_boxes = False
 
-        # --------------------------------------------------------------
         # Mouse
-        # --------------------------------------------------------------
-
         self.setMouseTracking(True)
-
-        self.setAttribute(
-            Qt.WidgetAttribute.WA_TransparentForMouseEvents,
-            False
-        )
-
-        self.setFocusPolicy(
-            Qt.FocusPolicy.StrongFocus
-        )
-
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.mouse_pos = QPoint(-1, -1)
 
-        # --------------------------------------------------------------
-        # Annotation UI
-        # --------------------------------------------------------------
-
+        # UI
         self.image_name = QLabel()
+        self.box_label_1 = QLabel("Point 1: (0, 0)")
+        self.box_label_2 = QLabel("Point 2: (0, 0)")
+        self.mouse_pos_label = QLabel("Mouse: (0, 0)")
 
-        self.box_label_1 = QLabel(
-            "Point 1: (0, 0)"
-        )
+        self.sam_points_label = QLabel(f"Points: {len(self.sam_points)}")
 
-        self.box_label_2 = QLabel(
-            "Point 2: (0, 0)"
-        )
-
-        self.mouse_pos_label = QLabel(
-            "Mouse: (0, 0)"
-        )
-
-        # --------------------------------------------------------------
         # Box scroll area
-        # --------------------------------------------------------------
-
         self.scroll_boxes_content = QWidget()
-
-        self.scroll_boxes_layout = QGridLayout(
-            self.scroll_boxes_content
-        )
-
-        self.scroll_boxes_layout.setContentsMargins(
-            0,
-            0,
-            0,
-            0
-        )
-
-        self.scroll_boxes_layout.setSpacing(
-            5
-        )
+        self.scroll_boxes_layout = QGridLayout(self.scroll_boxes_content)
+        self.scroll_boxes_layout.setContentsMargins(0, 0, 0, 0)
+        self.scroll_boxes_layout.setSpacing(5)
 
         self.scroll_boxes = QScrollArea()
+        self.scroll_boxes.setWidgetResizable(True)
+        self.scroll_boxes.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll_boxes.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.scroll_boxes.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.scroll_boxes.setWidget(self.scroll_boxes_content)
 
-        self.scroll_boxes.setWidgetResizable(
-            True
-        )
-
-        self.scroll_boxes.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-        )
-
-        self.scroll_boxes.setVerticalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAsNeeded
-        )
-
-        self.scroll_boxes.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Expanding
-        )
-
-        self.scroll_boxes.setWidget(
-            self.scroll_boxes_content
-        )
-
-        # --------------------------------------------------------------
         # Buttons
-        # --------------------------------------------------------------
+        self.change_default_class_btn = QPushButton("Change default class")
+        self.change_default_class_btn.clicked.connect(self.change_default_class)
+        self.show_all_boxes_btn = QPushButton("Show all boxes")
+        self.show_all_boxes_btn.clicked.connect(self._draw_all_boxes)
 
-        self.change_default_class_btn = QPushButton(
-            "Change default class"
-        )
-
-        self.change_default_class_btn.clicked.connect(
-            self.change_default_class
-        )
-
-        self.show_all_boxes_btn = QPushButton(
-            "Show all boxes"
-        )
-
-        self.show_all_boxes_btn.clicked.connect(
-            self._draw_all_boxes
-        )
-
-        # --------------------------------------------------------------
-        # Initial geometry
-        # --------------------------------------------------------------
+        # Change annotation type: YOLO or SAM
+        self.annotation_type = "YOLO"
+        self.annotation_type_label = QLabel(f"Label Type: {self.annotation_type}")
+        self.change_annotation_type = QPushButton("Switch to SAM Labelling")
+        self.change_annotation_type.clicked.connect(self.switch_annot_type)
 
         self._sync_geometry()
 
-    # ==================================================================
-    # SYNC OVERLAY GEOMETRY
-    # ==================================================================
+    def switch_annot_type(self):
+        if self.annotation_type == "YOLO":
+            self.annotation_type = "SAM"
+        else:
+            self.annotation_type = "YOLO"
+
+        if self.annotation_type == "SAM":
+            self.box_label_1.hide()
+            self.box_label_2.hide()
+
+        elif self.annotation_type == "YOLO":
+            self.box_label_1.show()
+            self.box_label_2.show()
+
 
     def _sync_geometry(self):
-
         if not self.parent_label.isVisible():
             return
-
-        self.setGeometry(
-            0,
-            0,
-            self.parent_label.width(),
-            self.parent_label.height()
-        )
-
+        self.setGeometry(0, 0, self.parent_label.width(), self.parent_label.height())
         self.raise_()
-
         self.update()
-
-    # ==================================================================
-    # WHEEL
-    # ==================================================================
 
     def wheelEvent(self, event):
         if self.image_viewer._panning:
             return
-
+        
         delta = event.angleDelta().y()
-    
         if delta > 0:
             self.image_viewer.zoom_in()
-
         elif delta < 0:
             self.image_viewer.zoom_out()
 
         event.accept()
-
         self.update()
-
-    # ==================================================================
-    # RESIZE
-    # ==================================================================
 
     def resizeEvent(self, event):
-
         super().resizeEvent(event)
-
         self.update()
 
-    # ==================================================================
-    # DISPLAY IMAGE RECT
-    # ==================================================================
-
     def _get_display_image_rect(self):
-
         width = self.parent_label.width()
         height = self.parent_label.height()
 
         if width <= 0 or height <= 0:
             return None
 
-        # Since the overlay is a child of image_label, these
-        # coordinates are already in exactly the same coordinate
-        # system as the image.
-        return (
-            0,
-            0,
-            width,
-            height
-        )
+        return (0, 0, width, height)
 
-    # ==================================================================
-    # WIDGET -> IMAGE COORDINATES
-    # ==================================================================
-
-    def widget_to_image_coords(
-        self,
-        wx,
-        wy
-    ):
+    def widget_to_image_coords(self, wx, wy):
         """
         Convert coordinates from the annotation overlay to
         original image pixel coordinates.
         """
-
         image = self.image_viewer.image()
-
         if image is None or image.isNull():
             return wx, wy
 
@@ -1542,48 +894,19 @@ class ImageLabellingControls(QWidget):
         if orig_w <= 0 or orig_h <= 0:
             return wx, wy
 
-        img_x = int(
-            (wx / draw_w) * orig_w
-        )
-
-        img_y = int(
-            (wy / draw_h) * orig_h
-        )
-
-        img_x = max(
-            0,
-            min(
-                img_x,
-                orig_w - 1
-            )
-        )
-
-        img_y = max(
-            0,
-            min(
-                img_y,
-                orig_h - 1
-            )
-        )
+        img_x = int( (wx / draw_w) * orig_w )
+        img_y = int( (wy / draw_h) * orig_h )
+        img_x = max(0, min(img_x, orig_w - 1))
+        img_y = max(0, min(img_y, orig_h - 1))
 
         return img_x, img_y
 
-    # ==================================================================
-    # IMAGE -> WIDGET COORDINATES
-    # ==================================================================
-
-    def image_to_widget_coords(
-        self,
-        ix,
-        iy
-    ):
+    def image_to_widget_coords(self, ix, iy):
         """
         Convert original image pixel coordinates to
         annotation overlay coordinates.
         """
-
         image = self.image_viewer.image()
-
         if image is None or image.isNull():
             return ix, iy
 
@@ -1593,57 +916,34 @@ class ImageLabellingControls(QWidget):
         orig_w = image.width()
         orig_h = image.height()
 
-        if (
-            draw_w <= 0
-            or draw_h <= 0
-            or orig_w <= 0
-            or orig_h <= 0
-        ):
+        if (draw_w <= 0 or draw_h <= 0 or orig_w <= 0 or orig_h <= 0):
             return ix, iy
 
-        wx = (
-            ix / orig_w
-        ) * draw_w
-
-        wy = (
-            iy / orig_h
-        ) * draw_h
+        wx = (ix / orig_w) * draw_w
+        wy = (iy / orig_h) * draw_h
 
         return wx, wy
-
-    # ==================================================================
-    # KEYBOARD
-    # ==================================================================
 
     def keyPressEvent(self, event: QKeyEvent):
 
         if event.key() == Qt.Key.Key_Escape:
-
             self.reset_box()
             self.update()
 
         elif event.key() == Qt.Key.Key_Right:
-
             self.reset_box()
-
             try:
-
                 self.parents.controller.home.inspect_img(
                     self.parents.images[
                         self.parents.img_index + 1
                     ]
                 )
-
             except IndexError:
-
                 pass
 
         elif event.key() == Qt.Key.Key_Left:
-
             self.reset_box()
-
             if self.parents.img_index >= 1:
-
                 self.parents.controller.home.inspect_img(
                     self.parents.images[
                         self.parents.img_index - 1
@@ -1651,35 +951,15 @@ class ImageLabellingControls(QWidget):
                 )
 
         else:
-
             super().keyPressEvent(event)
 
-    # ==================================================================
-    # MOUSE MOVE
-    # ==================================================================
-
     def mouseMoveEvent(self, event):
-
-        current_pos = (
-            event.position().toPoint()
-        )
-
-        # --------------------------------------------------------------
-        # Middle-mouse panning
-        # --------------------------------------------------------------
+        current_pos = event.position().toPoint()
 
         if self.image_viewer._panning:
-
-            self.image_viewer._update_pan(
-                current_pos
-            )
-
+            self.image_viewer._update_pan(current_pos)
             event.accept()
             return
-
-        # --------------------------------------------------------------
-        # Annotation mouse tracking
-        # --------------------------------------------------------------
 
         self.mouse_pos = current_pos
 
@@ -1690,20 +970,12 @@ class ImageLabellingControls(QWidget):
             )
         )
 
-        self.mouse_pos_label.setText(
-            f"Mouse: ({img_x}, {img_y})"
-        )
+        self.mouse_pos_label.setText(f"Mouse: ({img_x}, {img_y})")
 
         self.update()
-
         event.accept()
 
-    # ==================================================================
-    # MOUSE PRESS
-    # ==================================================================
-
     def mousePressEvent(self, event):
-
         pos = event.position().toPoint()
 
         x = pos.x()
@@ -1711,286 +983,154 @@ class ImageLabellingControls(QWidget):
 
         self.setFocus()
 
-        # --------------------------------------------------------------
-        # Middle mouse = pan
-        # --------------------------------------------------------------
-
         if event.button() == Qt.MouseButton.MiddleButton:
-
-            self.image_viewer._start_pan(
-                pos
-            )
-
+            self.image_viewer._start_pan(pos)
             event.accept()
             return
-
-        # --------------------------------------------------------------
-        # Right mouse = change crosshair color
-        # --------------------------------------------------------------
 
         if event.button() == Qt.MouseButton.RightButton:
-
-            self.color_index = (
-                self.color_index + 1
-            ) % len(self.colors)
-
+            self.color_index = (self.color_index + 1) % len(self.colors)
             self.update()
-
             event.accept()
             return
 
-        # --------------------------------------------------------------
-        # Ignore anything except left mouse
-        # --------------------------------------------------------------
-
         if event.button() != Qt.MouseButton.LeftButton:
-
             event.ignore()
             return
 
-        # --------------------------------------------------------------
-        # Convert to original image coordinates
-        # --------------------------------------------------------------
+        img_x, img_y = self.widget_to_image_coords(x, y)
 
-        img_x, img_y = (
-            self.widget_to_image_coords(
-                x,
-                y
-            )
-        )
+        if self.annotation_type == "YOLO":
+            if self.current_box[0] == (-1, -1):
+                self.current_box[0] = (img_x, img_y)
 
-        # --------------------------------------------------------------
-        # First point
-        # --------------------------------------------------------------
-
-        if self.current_box[0] == (-1, -1):
-
-            self.current_box[0] = (
-                img_x,
-                img_y
-            )
-
-            self.box_label_1.setText(
-                f"Point 1: ({img_x}, {img_y})"
-            )
-
-            self.box_label_2.setText(
-                "Point 2: (0, 0)"
-            )
-
-        # --------------------------------------------------------------
-        # Second point
-        # --------------------------------------------------------------
-
-        else:
-
-            if self.default_class != "none":
-
-                def_class = self.default_class
+                self.box_label_1.setText(f"Point 1: ({img_x}, {img_y})")
+                self.box_label_2.setText("Point 2: (0, 0)")
 
             else:
+                if self.default_class != "none":
+                    def_class = self.default_class
 
-                def_class = (
-                    self.species[0]
-                    if self.species
-                    else "none"
-                )
+                else:
+                    def_class = (self.species[0] if self.species else "none")
 
-            self.current_box[1] = (
-                img_x,
-                img_y
-            )
+                self.current_box[1] = (img_x, img_y)
+                self.box_label_2.setText(f"Point 2: ({img_x}, {img_y})")
 
-            self.box_label_2.setText(
-                f"Point 2: ({img_x}, {img_y})"
-            )
-
-            self.write_box_data(
-                self.current_box,
-                def_class
-            )
-
-            self.current_box = [
-                (-1, -1),
-                (-1, -1)
-            ]
-
+                self.write_box_data(self.current_box, def_class)
+                self.current_box = [(-1, -1), (-1, -1)]
+        elif self.annotation_type == "SAM":
+            self.sam_points.append((img_x, img_y))
+            self.sam_points_label.setText(f"Points: {len(self.sam_points)}")
+                        
         self.update()
-
         event.accept()
-
-    # ==================================================================
-    # MOUSE RELEASE
-    # ==================================================================
 
     def mouseReleaseEvent(self, event):
 
         if event.button() == Qt.MouseButton.MiddleButton:
-
             self.image_viewer._end_pan()
-
-            event.accept()
-            return
 
         event.accept()
 
-    # ==================================================================
-    # PAINT
-    # ==================================================================
-
     def paintEvent(self, event):
-
         pixmap = self.parent_label.pixmap()
-
         if not pixmap or pixmap.isNull():
             return
 
-        image_rect = (
-            self._get_display_image_rect()
-        )
-
+        image_rect = self._get_display_image_rect()
         if image_rect is None:
             return
 
-        x_offset, y_offset, draw_w, draw_h = (
-            image_rect
-        )
+        x_offset, y_offset, draw_w, draw_h = image_rect
 
         painter = QPainter(self)
-
-        painter.setRenderHint(
-            QPainter.RenderHint.SmoothPixmapTransform
-        )
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
 
         mx = self.mouse_pos.x()
         my = self.mouse_pos.y()
 
-        # --------------------------------------------------------------
-        # Crosshair
-        # --------------------------------------------------------------
-
         if mx != -1 and my != -1:
-
-            pen = QPen(
-                self.colors[self.color_index],
-                1,
-                Qt.PenStyle.DashLine
-            )
-
+            pen = QPen(self.colors[self.color_index], 1, Qt.PenStyle.DashLine)
             painter.setPen(pen)
 
-            clamped_x = min(
-                max(mx, x_offset),
-                x_offset + draw_w
-            )
+            clamped_x = min( max(mx, x_offset), x_offset + draw_w )
+            clamped_y = min( max(my, y_offset), y_offset + draw_h )
 
-            clamped_y = min(
-                max(my, y_offset),
-                y_offset + draw_h
-            )
+            painter.drawLine(x_offset, clamped_y, x_offset + draw_w, clamped_y)
+            painter.drawLine(clamped_x, y_offset, clamped_x, y_offset + draw_h)
 
-            painter.drawLine(
-                x_offset,
-                clamped_y,
-                x_offset + draw_w,
-                clamped_y
-            )
+            if self.annotation_type == "YOLO":
+                if self.current_box[0] != (-1, -1):
 
-            painter.drawLine(
-                clamped_x,
-                y_offset,
-                clamped_x,
-                y_offset + draw_h
-            )
+                    p1x_img, p1y_img = self.current_box[0]
 
-            # ----------------------------------------------------------
-            # Current box
-            # ----------------------------------------------------------
+                    p1x, p1y = self.image_to_widget_coords(p1x_img, p1y_img)
+                    
+                    rect_x = min(clamped_x, p1x)
+                    rect_y = min(clamped_y, p1y)
 
-            if self.current_box[0] != (-1, -1):
+                    rect_w = abs(p1x - clamped_x)
+                    rect_h = abs(p1y - clamped_y)
 
-                p1x_img, p1y_img = (
-                    self.current_box[0]
-                )
-
-                p1x, p1y = (
-                    self.image_to_widget_coords(
-                        p1x_img,
-                        p1y_img
-                    )
-                )
-
-                rect_x = min(
-                    clamped_x,
-                    p1x
-                )
-
-                rect_y = min(
-                    clamped_y,
-                    p1y
-                )
-
-                rect_w = abs(
-                    p1x - clamped_x
-                )
-
-                rect_h = abs(
-                    p1y - clamped_y
-                )
-
-                painter.drawRect(
-                    QRectF(
-                        rect_x,
-                        rect_y,
-                        rect_w,
-                        rect_h
-                    )
-                )
-
-        # --------------------------------------------------------------
-        # Hovered box
-        # --------------------------------------------------------------
-
+                    painter.drawRect(QRectF(rect_x, rect_y, rect_w, rect_h))
+            elif self.annotation_type == "SAM":
+                if len(self.sam_points) > 0:
+                    # draw a line from the last point to the mouse
+                    painter.drawLine(QPoint(*self.sam_points[-1]), QPoint(self.mouse_pos))
+                    # draw lines between other points
+                    prev_point = QPoint(0, 0)
+                    if len(self.sam_points) > 1:
+                        for p in self.sam_points:
+                            point = QPoint(*p)
+                            if not prev_point == QPoint(0, 0):
+                                painter.drawLine(prev_point, point)
+                            prev_point = point
         if self.hovered_box_label is not None:
-
-            self._draw_box_from_label(
-                painter,
-                self.hovered_box_label,
-                QColor("#ffd93d"),
-                3
-            )
-
-        # --------------------------------------------------------------
-        # All boxes
-        # --------------------------------------------------------------
+            if self.annotation_type == "YOLO":
+                self._draw_box_from_label(painter, self.hovered_box_label, QColor("#ffd93d"), 3)
+            elif self.annotation_type == "SAM":
+                return # WIP
 
         if self.showing_all_boxes:
+            if self.annotation_type == "YOLO":
+                for box_label in self.boxes_lines:
+                    self._draw_box_from_label(painter, box_label, QColor("#00ff00"), 2)
+            elif self.annotation_type == "SAM":
+                return # WIP
 
-            for box_label in self.boxes_lines:
-
-                self._draw_box_from_label(
-                    painter,
-                    box_label,
-                    QColor("#00ff00"),
-                    2
-                )
-
-    # ==================================================================
-    # DRAW BOX FROM YOLO LABEL
-    # ==================================================================
-
-    def _draw_box_from_label(
-        self,
-        painter,
-        label,
-        color,
-        width=2
-    ):
-
+    def _draw_sam_label(self, painter, label_json, color, width=2):
+        # json structure:
+        #{
+        #"image": {
+        #    "image_id": 123456,
+        #    "file_name": "sa_123456.jpg",
+        #    "width": 2048,
+        #    "height": 1536
+        #},
+        #"annotations": [
+        #    {
+        #    "id": 1,
+        #    "segmentation": {
+        #        "size": [1536, 2048],
+        #        "counts": "Z]1;001O100O100O1..."
+        #    },
+        #    "bbox": [120.0, 240.0, 50.0, 80.0],
+        #    "area": 4520,
+        #    "predicted_iou": 0.9834,
+        #    "stability_score": 0.9712
+        #    }
+        #]
+        #}
         try:
+            with open(label_json, "a"):
 
+        except ValueError:
+            return
+
+    def _draw_box_from_label(self, painter, label, color, width=2):
+        try:
             parts = label.split()
-
             if len(parts) < 5:
                 return
 
@@ -2000,309 +1140,158 @@ class ImageLabellingControls(QWidget):
             cy = float(parts[2])
             bw = float(parts[3])
             bh = float(parts[4])
-
         except ValueError:
-
             return
 
         pixmap = self.parent_label.pixmap()
-
         if not pixmap or pixmap.isNull():
             return
 
-        image_rect = (
-            self._get_display_image_rect()
-        )
-
+        image_rect = self._get_display_image_rect()
         if image_rect is None:
             return
 
-        x_offset, y_offset, draw_w, draw_h = (
-            image_rect
-        )
+        x_offset, y_offset, draw_w, draw_h = image_rect
 
-        x1 = (
-            x_offset +
-            (cx - bw / 2) * draw_w
-        )
+        x1 = x_offset + (cx - bw / 2) * draw_w
+        y1 = y_offset + (cy - bh / 2) * draw_h
+        x2 = x_offset + (cx + bw / 2) * draw_w
+        y2 = y_offset + (cy + bh / 2) * draw_h
 
-        y1 = (
-            y_offset +
-            (cy - bh / 2) * draw_h
-        )
+        rect = QRectF( min(x1, x2), min(y1, y2), abs(x2 - x1), abs(y2 - y1) )
 
-        x2 = (
-            x_offset +
-            (cx + bw / 2) * draw_w
-        )
-
-        y2 = (
-            y_offset +
-            (cy + bh / 2) * draw_h
-        )
-
-        rect = QRectF(
-            min(x1, x2),
-            min(y1, y2),
-            abs(x2 - x1),
-            abs(y2 - y1)
-        )
-
-        painter.setPen(
-            QPen(
-                color,
-                width,
-                Qt.PenStyle.SolidLine
-            )
-        )
-
+        painter.setPen(QPen(color, width, Qt.PenStyle.SolidLine))
         painter.drawRect(rect)
-
-        # --------------------------------------------------------------
-        # Class label
-        # --------------------------------------------------------------
-
         font = painter.font()
         font.setPointSize(8)
-
         painter.setFont(font)
-
-        painter.drawText(
-            int(min(x1, x2)) + 2,
-            int(min(y1, y2)) - 3,
-            class_name
-        )
-
-    # ==================================================================
-    # LEAVE
-    # ==================================================================
+        painter.drawText(int(min(x1, x2)) + 2, int(min(y1, y2)) - 3, class_name)
 
     def leaveEvent(self, event):
-
         self.update()
-
         super().leaveEvent(event)
 
-    # ==================================================================
-    # SHOW ALL BOXES
-    # ==================================================================
-
     def _draw_all_boxes(self):
-
-        self.showing_all_boxes = (
-            not self.showing_all_boxes
-        )
-
+        self.showing_all_boxes = (not self.showing_all_boxes)
         self.update()
-
-    # ==================================================================
-    # RESET CURRENT BOX
-    # ==================================================================
 
     def reset_box(self):
+        if self.annotation_type == "YOLO":
+            if self.current_box[0] != (-1, -1):
+                self.current_box = [ (-1, -1), (-1, -1) ]
+                self.box_label_1.setText("Point 1: (0, 0)")
+                self.box_label_2.setText("Point 2: (0, 0)")
+        if self.annotation_type == "SAM":
+            self.sam_points.clear()
 
-        if self.current_box[0] != (-1, -1):
+    def write_box_data(self, label, boxclass):
+        if self.annotation_type == "YOLO":
+            if label[0] == (-1, -1) or label[1] == (-1, -1):
+                return
 
-            self.current_box = [
-                (-1, -1),
-                (-1, -1)
-            ]
+            image = self.image_viewer.image()
+            if image is None or image.isNull():
+                return
 
-            self.box_label_1.setText(
-                "Point 1: (0, 0)"
-            )
+            orig_w = image.width()
+            orig_h = image.height()
 
-            self.box_label_2.setText(
-                "Point 2: (0, 0)"
-            )
+            x1, y1 = label[0]
+            x2, y2 = label[1]
 
-    # ==================================================================
-    # WRITE BOX DATA
-    # ==================================================================
+            x1_img = min(x1, x2)
+            y1_img = min(y1, y2)
 
-    def write_box_data(
-        self,
-        box,
-        boxclass
-    ):
+            x2_img = max(x1, x2)
+            y2_img = max(y1, y2)
 
-        if (
-            box[0] == (-1, -1)
-            or box[1] == (-1, -1)
-        ):
-            return
+            center_x = (x1_img + x2_img) / 2
+            center_y = (y1_img + y2_img) / 2
 
-        image = self.image_viewer.image()
+            width = abs(x2_img - x1_img)
+            height = abs(y2_img - y1_img)
 
-        if image is None or image.isNull():
-            return
+            norm_x = center_x / orig_w
+            norm_y = center_y / orig_h
+            norm_w = width / orig_w
+            norm_h = height / orig_h
 
-        orig_w = image.width()
-        orig_h = image.height()
+            with open(self.image_label_file, "a") as f:
+                f.write(
+                    f"{boxclass} "
+                    f"{norm_x} "
+                    f"{norm_y} "
+                    f"{norm_w} "
+                    f"{norm_h}\n"
+                )
 
-        x1, y1 = box[0]
-        x2, y2 = box[1]
+        elif self.annotation_type == "SAM":
+            if len(self.sam_points) <= 2:
+                return
+            # json structure:
+            #{
+            #"image": {
+            #    "image_id": 123456,
+            #    "file_name": "sa_123456.jpg",
+            #    "width": 2048,
+            #    "height": 1536
+            #},
+            #"annotations": [
+            #    {
+            #    "id": 1,
+            #    "segmentation": {
+            #        "size": [1536, 2048],
+            #        "counts": "Z]1;001O100O100O1..."
+            #    },
+            #    "bbox": [120.0, 240.0, 50.0, 80.0],
+            #    "area": 4520,
+            #    "predicted_iou": 0.9834,
+            #    "stability_score": 0.9712
+            #    }
+            #]
+            #}
+            json_data = []
+            for annotation in 
 
-        x1_img = min(x1, x2)
-        y1_img = min(y1, y2)
 
-        x2_img = max(x1, x2)
-        y2_img = max(y1, y2)
-
-        center_x = (
-            x1_img + x2_img
-        ) / 2
-
-        center_y = (
-            y1_img + y2_img
-        ) / 2
-
-        width = abs(
-            x2_img - x1_img
-        )
-
-        height = abs(
-            y2_img - y1_img
-        )
-
-        norm_x = (
-            center_x / orig_w
-        )
-
-        norm_y = (
-            center_y / orig_h
-        )
-
-        norm_w = (
-            width / orig_w
-        )
-
-        norm_h = (
-            height / orig_h
-        )
-
-        with open(
-            self.image_label_file,
-            "a"
-        ) as f:
-
-            f.write(
-                f"{boxclass} "
-                f"{norm_x} "
-                f"{norm_y} "
-                f"{norm_w} "
-                f"{norm_h}\n"
-            )
-
-        self.load_saved_boxes(
-            self.image_label_file
-        )
-
-    # ==================================================================
-    # LOAD SAVED BOXES
-    # ==================================================================
+        self.load_saved_boxes(self.image_label_file)
 
     def load_saved_boxes(self, file):
-
         self.image_label_file = file
-
-        with open(
-            file,
-            "r"
-        ) as f:
-
+        with open(file, "r") as f:
             self.boxes_lines = [
-                line
-                for line in f.read().splitlines()
-                if line
+                line for line in f.read().splitlines() if line
             ]
 
-        self.update_visible_boxes(
-            self.boxes_lines
-        )
-
+        self.update_visible_boxes(self.boxes_lines)
         self.update()
 
-    # ==================================================================
-    # UPDATE VISIBLE BOXES
-    # ==================================================================
-
-    def update_visible_boxes(
-        self,
-        boxes_labels
-    ):
-
+    def update_visible_boxes(self, boxes_labels):
         self.boxes_lines = boxes_labels
 
-        # --------------------------------------------------------------
-        # Remove old widgets
-        # --------------------------------------------------------------
-
         while self.scroll_boxes_layout.count():
-
-            item = (
-                self.scroll_boxes_layout.takeAt(0)
-            )
-
+            item = self.scroll_boxes_layout.takeAt(0)
             if item is not None:
-
                 widget = item.widget()
-
                 if widget is not None:
-
                     widget.deleteLater()
 
-        # --------------------------------------------------------------
-        # Layout configuration
-        # --------------------------------------------------------------
-
-        self.scroll_boxes_layout.setColumnStretch(
-            0,
-            1
-        )
-
-        self.scroll_boxes_layout.setColumnStretch(
-            1,
-            1
-        )
-
-        self.scroll_boxes_layout.setHorizontalSpacing(
-            8
-        )
-
-        self.scroll_boxes_layout.setVerticalSpacing(
-            8
-        )
-
-        # --------------------------------------------------------------
-        # Create box widgets
-        # --------------------------------------------------------------
+        self.scroll_boxes_layout.setColumnStretch(0, 1)
+        self.scroll_boxes_layout.setColumnStretch(1, 1)
+        self.scroll_boxes_layout.setHorizontalSpacing(8)
+        self.scroll_boxes_layout.setVerticalSpacing(8)
 
         for idx, box in enumerate(boxes_labels):
-
             parts = box.split()
-
             if len(parts) < 5:
                 continue
 
             row = idx // 2
             col = idx % 2
 
-            # ----------------------------------------------------------
-            # Container
-            # ----------------------------------------------------------
-
             box_container = QWidget()
-
-            box_container.setSizePolicy(
-                QSizePolicy.Policy.Expanding,
-                QSizePolicy.Policy.Fixed
-            )
-
-            box_container.setMinimumWidth(
-                160
-            )
-
+            box_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            box_container.setMinimumWidth(160)
             box_container_base_style = (
                 "QWidget {"
                 "  border: 1px solid #7a7a7a;"
@@ -2312,55 +1301,22 @@ class ImageLabellingControls(QWidget):
                 "}"
             )
 
-            box_container.setStyleSheet(
-                box_container_base_style
-            )
+            box_container.setStyleSheet(box_container_base_style)
+            boxinfo_layout = QVBoxLayout(box_container)
 
-            boxinfo_layout = QVBoxLayout(
-                box_container
-            )
-
-            boxinfo_layout.setContentsMargins(
-                4,
-                4,
-                4,
-                4
-            )
-
-            boxinfo_layout.setSpacing(
-                5
-            )
-
-            # ----------------------------------------------------------
-            # Box information
-            # ----------------------------------------------------------
+            boxinfo_layout.setContentsMargins(4, 4, 4, 4)
+            boxinfo_layout.setSpacing(5)
 
             image = self.image_viewer.image()
-
             if image is not None and not image.isNull():
-
                 orig_w = image.width()
                 orig_h = image.height()
 
-                center_x = (
-                    float(parts[1]) *
-                    orig_w
-                )
+                center_x = float(parts[1]) * orig_w
+                center_y = float(parts[2]) * orig_h
 
-                center_y = (
-                    float(parts[2]) *
-                    orig_h
-                )
-
-                width = (
-                    float(parts[3]) *
-                    orig_w
-                )
-
-                height = (
-                    float(parts[4]) *
-                    orig_h
-                )
+                width = float(parts[3]) * orig_w
+                height = float(parts[4]) * orig_h
 
                 box_info_text = (
                     f"Box {idx + 1} "
@@ -2373,132 +1329,36 @@ class ImageLabellingControls(QWidget):
                 )
 
             else:
-
                 box_info_text = (
                     f"Box {idx + 1}\n"
                     f"Class: {parts[0]}"
                 )
-
-            box_info = QLabel(
-                box_info_text
-            )
-
-            # ----------------------------------------------------------
-            # Buttons
-            # ----------------------------------------------------------
+            box_info = QLabel(box_info_text)
 
             buttons_layout = QHBoxLayout()
+            buttons_layout.setContentsMargins(0, 0, 0, 0)
+            buttons_layout.setSpacing(5)
 
-            buttons_layout.setContentsMargins(
-                0,
-                0,
-                0,
-                0
-            )
-
-            buttons_layout.setSpacing(
-                5
-            )
-
-            delete_box_btn = QPushButton(
-                "Delete"
-            )
-
-            delete_box_btn.setFixedSize(
-                60,
-                30
-            )
-
-            # IMPORTANT:
-            #
-            # box=box captures the current loop value instead of
-            # allowing the lambda to use the final loop value.
-            #
-            delete_box_btn.clicked.connect(
-                lambda checked=False, box=box:
-                    self.delete_label(box)
-            )
-
-            # ----------------------------------------------------------
-            # Species dropdown
-            # ----------------------------------------------------------
+            delete_box_btn = QPushButton("Delete")
+            delete_box_btn.setFixedSize(60, 30)
+            delete_box_btn.clicked.connect(lambda checked=False, box=box: self.delete_label(box))
 
             species_list_dropdown = QComboBox()
+            species_list_dropdown.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+            species_list_dropdown.addItems(self.species)
+            species_list_dropdown.setCurrentText(parts[0])
+            species_list_dropdown.currentTextChanged.connect(lambda new_class, box=box: self.change_species_label(box, new_class))
 
-            species_list_dropdown.setSizePolicy(
-                QSizePolicy.Policy.Expanding,
-                QSizePolicy.Policy.Preferred
-            )
+            buttons_layout.addWidget(delete_box_btn)
+            buttons_layout.addWidget(species_list_dropdown)
+            boxinfo_layout.addWidget(box_info, alignment=Qt.AlignmentFlag.AlignTop)
+            boxinfo_layout.addLayout(buttons_layout)
 
-            species_list_dropdown.addItems(
-                self.species
-            )
+            self.scroll_boxes_layout.addWidget(box_container, row, col, 1, 1, (Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft))
 
-            species_list_dropdown.setCurrentText(
-                parts[0]
-            )
+            box_container.setProperty("box_label", box)
 
-            # IMPORTANT:
-            #
-            # Capture both box and the new class correctly.
-            #
-            species_list_dropdown.currentTextChanged.connect(
-                lambda new_class, box=box:
-                    self.change_species_label(
-                        box,
-                        new_class
-                    )
-            )
-
-            # ----------------------------------------------------------
-            # Assemble buttons
-            # ----------------------------------------------------------
-
-            buttons_layout.addWidget(
-                delete_box_btn
-            )
-
-            buttons_layout.addWidget(
-                species_list_dropdown
-            )
-
-            boxinfo_layout.addWidget(
-                box_info,
-                alignment=Qt.AlignmentFlag.AlignTop
-            )
-
-            boxinfo_layout.addLayout(
-                buttons_layout
-            )
-
-            # ----------------------------------------------------------
-            # Add to grid
-            # ----------------------------------------------------------
-
-            self.scroll_boxes_layout.addWidget(
-                box_container,
-                row,
-                col,
-                1,
-                1,
-                (
-                    Qt.AlignmentFlag.AlignTop |
-                    Qt.AlignmentFlag.AlignLeft
-                )
-            )
-
-            box_container.setProperty(
-                "box_label",
-                box
-            )
-
-            box_container.installEventFilter(
-                self
-            )
-
-    # ==================================================================
-    # CHANGE DEFAULT CLASS
-    # ==================================================================
+            box_container.installEventFilter(self)
 
     def change_default_class(self):
 
@@ -2512,10 +1372,6 @@ class ImageLabellingControls(QWidget):
         if ok and choice:
 
             self.default_class = choice
-
-    # ==================================================================
-    # CHANGE SPECIES LABEL
-    # ==================================================================
 
     def change_species_label(
         self,
@@ -2553,10 +1409,6 @@ class ImageLabellingControls(QWidget):
             self.image_label_file
         )
 
-    # ==================================================================
-    # DELETE LABEL
-    # ==================================================================
-
     def delete_label(self, label):
 
         if label in self.boxes_lines:
@@ -2580,22 +1432,9 @@ class ImageLabellingControls(QWidget):
             self.image_label_file
         )
 
-    # ==================================================================
-    # EVENT FILTER
-    # ==================================================================
-
-    def eventFilter(
-        self,
-        watched,
-        event
-    ):
-
-        # --------------------------------------------------------------
-        # Image label geometry
-        # --------------------------------------------------------------
+    def eventFilter(self, watched, event):
 
         if watched == self.parent_label:
-
             if event.type() in (
                 QEvent.Type.Resize,
                 QEvent.Type.Move,
@@ -2606,14 +1445,8 @@ class ImageLabellingControls(QWidget):
                 self._sync_geometry()
                 self.update()
 
-        # --------------------------------------------------------------
-        # Box hover
-        # --------------------------------------------------------------
-
         else:
-
             if isinstance(watched, QWidget):
-
                 box_label = watched.property(
                     "box_label"
                 )
@@ -2663,10 +1496,6 @@ class ImageLabellingControls(QWidget):
         )
 
 
-# ======================================================================
-# IMAGE VIEWER
-# ======================================================================
-
 class ImageViewer(QWidget):
 
     def __init__(self, parent=None):
@@ -2676,10 +1505,6 @@ class ImageViewer(QWidget):
         self._scale_factor = 1.0
         self._first_file_dialog = True
         self._image = None
-
-        # --------------------------------------------------------------
-        # Image label
-        # --------------------------------------------------------------
 
         self._image_label = QLabel()
 
@@ -2703,10 +1528,6 @@ class ImageViewer(QWidget):
         self._image_label.setMouseTracking(
             True
         )
-
-        # --------------------------------------------------------------
-        # Scroll area
-        # --------------------------------------------------------------
 
         self._scroll_area = QScrollArea()
 
@@ -2734,10 +1555,6 @@ class ImageViewer(QWidget):
             Qt.ScrollBarPolicy.ScrollBarAsNeeded
         )
 
-        # --------------------------------------------------------------
-        # Layout
-        # --------------------------------------------------------------
-
         layout = QVBoxLayout(self)
 
         layout.setContentsMargins(
@@ -2751,10 +1568,6 @@ class ImageViewer(QWidget):
             self._scroll_area
         )
 
-        # --------------------------------------------------------------
-        # Panning
-        # --------------------------------------------------------------
-
         self._panning = False
 
         self._pan_start = QPoint()
@@ -2762,31 +1575,15 @@ class ImageViewer(QWidget):
         self._horizontal_start = 0
         self._vertical_start = 0
 
-        # --------------------------------------------------------------
-        # Actions
-        # --------------------------------------------------------------
-
         self._create_actions()
-
-    # ==================================================================
-    # PUBLIC IMAGE LABEL
-    # ==================================================================
 
     @property
     def image_label(self):
         return self._image_label
 
-    # ==================================================================
-    # PUBLIC SCROLL AREA
-    # ==================================================================
-
     @property
     def scroll_area(self):
         return self._scroll_area
-
-    # ==================================================================
-    # PUBLIC IMAGE
-    # ==================================================================
 
     def image(self):
         """
@@ -2799,17 +1596,9 @@ class ImageViewer(QWidget):
 
         return self._image
 
-    # ==================================================================
-    # DISPLAY RECT
-    # ==================================================================
-
     def display_rect(self):
 
         return self._image_label.geometry()
-
-    # ==================================================================
-    # LOAD FILE
-    # ==================================================================
 
     def load_file(
         self,
@@ -2850,10 +1639,6 @@ class ImageViewer(QWidget):
 
         return True
 
-    # ==================================================================
-    # SET IMAGE
-    # ==================================================================
-
     def _set_image(
         self,
         new_image
@@ -2881,25 +1666,13 @@ class ImageViewer(QWidget):
 
         self._scale_factor = 1.0
 
-        # --------------------------------------------------------------
-        # QLabel is exactly the size of the image
-        # --------------------------------------------------------------
-
         self._image_label.setFixedSize(
             pixmap.size()
         )
 
-        # --------------------------------------------------------------
-        # Resize annotation overlay
-        # --------------------------------------------------------------
-
         self._update_overlay_geometry()
 
         self._update_actions()
-
-    # ==================================================================
-    # UPDATE OVERLAY GEOMETRY
-    # ==================================================================
 
     def _update_overlay_geometry(self):
 
@@ -2922,20 +1695,12 @@ class ImageViewer(QWidget):
 
         overlay.update()
 
-    # ==================================================================
-    # ZOOM IN
-    # ==================================================================
-
     @Slot()
     def zoom_in(self):
 
         self._scale_image(
             1.25
         )
-
-    # ==================================================================
-    # ZOOM OUT
-    # ==================================================================
 
     @Slot()
     def zoom_out(self):
@@ -2944,13 +1709,8 @@ class ImageViewer(QWidget):
             0.8
         )
 
-    # Keep compatibility with the original private methods.
     _zoom_in = zoom_in
     _zoom_out = zoom_out
-
-    # ==================================================================
-    # NORMAL SIZE
-    # ==================================================================
 
     @Slot()
     def _normal_size(self):
@@ -2971,10 +1731,6 @@ class ImageViewer(QWidget):
         self._update_overlay_geometry()
 
         self._update_actions()
-
-    # ==================================================================
-    # FIT TO WINDOW
-    # ==================================================================
 
     @Slot()
     def _fit_to_window(self):
@@ -3011,10 +1767,6 @@ class ImageViewer(QWidget):
             self._normal_size()
 
         self._update_actions()
-
-    # ==================================================================
-    # SCALE IMAGE
-    # ==================================================================
 
     def _scale_image(
         self,
@@ -3053,10 +1805,6 @@ class ImageViewer(QWidget):
             self._scale_factor
         )
 
-        # --------------------------------------------------------------
-        # Scroll position before zoom
-        # --------------------------------------------------------------
-
         hbar = (
             self._scroll_area.horizontalScrollBar()
         )
@@ -3088,20 +1836,12 @@ class ImageViewer(QWidget):
             viewport_center_y
         )
 
-        # --------------------------------------------------------------
-        # Resize image
-        # --------------------------------------------------------------
-
         self._image_label.setFixedSize(
             new_width,
             new_height
         )
 
         self._update_overlay_geometry()
-
-        # --------------------------------------------------------------
-        # Preserve zoom center
-        # --------------------------------------------------------------
 
         new_h = int(
             image_x *
@@ -3124,10 +1864,6 @@ class ImageViewer(QWidget):
         )
 
         self._update_actions()
-
-    # ==================================================================
-    # START PAN
-    # ==================================================================
 
     def _start_pan(
         self,
@@ -3154,10 +1890,6 @@ class ImageViewer(QWidget):
             Qt.CursorShape.ClosedHandCursor
         )
 
-    # ==================================================================
-    # UPDATE PAN
-    # ==================================================================
-
     def _update_pan(
         self,
         position
@@ -3181,10 +1913,6 @@ class ImageViewer(QWidget):
             delta.y()
         )
 
-    # ==================================================================
-    # END PAN
-    # ==================================================================
-
     def _end_pan(self):
 
         self._panning = False
@@ -3193,33 +1921,10 @@ class ImageViewer(QWidget):
             Qt.CursorShape.ArrowCursor
         )
 
-    # ==================================================================
-    # MOUSE EVENT FILTER
-    # ==================================================================
-
-    def eventFilter(
-        self,
-        watched,
-        event
-    ):
-
-        # This remains here for compatibility if something else
-        # installs an event filter on image_label.
-        #
-        # Annotation overlay itself handles middle-mouse events because
-        # it sits above the image label.
-
-        return super().eventFilter(
-            watched,
-            event
-        )
-
-    # ==================================================================
-    # CREATE ACTIONS
-    # ==================================================================
+    def eventFilter(self, watched, event):
+        return super().eventFilter(watched, event)
 
     def _create_actions(self):
-
         self._save_as_act = QAction(
             "&Save As...",
             self
@@ -3266,10 +1971,6 @@ class ImageViewer(QWidget):
 
         self._update_actions()
 
-    # ==================================================================
-    # UPDATE ACTIONS
-    # ==================================================================
-
     def _update_actions(self):
 
         has_image = (
@@ -3307,32 +2008,15 @@ class ImageViewer(QWidget):
             enable_zoom
         )
 
-    # ==================================================================
-    # SAVE FILE
-    # ==================================================================
-
-    def _save_file(
-        self,
-        fileName
-    ):
-
+    def _save_file(self, fileName):
         if self._image is None:
             return False
 
-        writer = QImageWriter(
-            str(fileName)
-        )
+        writer = QImageWriter(str(fileName))
 
-        native_filename = (
-            QDir.toNativeSeparators(
-                str(fileName)
-            )
-        )
+        native_filename = (QDir.toNativeSeparators(str(fileName)))
 
-        if not writer.write(
-            self._image
-        ):
-
+        if not writer.write(self._image):
             QMessageBox.information(
                 self,
                 QGuiApplication.applicationDisplayName(),
@@ -3344,10 +2028,6 @@ class ImageViewer(QWidget):
 
         return True
 
-    # ==================================================================
-    # COPY
-    # ==================================================================
-
     @Slot()
     def _copy(self):
 
@@ -3356,10 +2036,6 @@ class ImageViewer(QWidget):
             QGuiApplication.clipboard().setImage(
                 self._image
             )
-
-    # ==================================================================
-    # PASTE
-    # ==================================================================
 
     @Slot()
     def _paste(self):
@@ -3376,10 +2052,6 @@ class ImageViewer(QWidget):
         self._set_image(
             new_image
         )
-
-    # ==================================================================
-    # PRINT
-    # ==================================================================
 
     @Slot()
     def _print_(self):
@@ -3409,24 +2081,8 @@ class ImageViewer(QWidget):
 
                 size = pixmap.size()
 
-                size.scale(
-                    rect.size(),
-                    Qt.AspectRatioMode.KeepAspectRatio
-                )
+                size.scale(rect.size(), Qt.AspectRatioMode.KeepAspectRatio)
 
-                painter.setViewport(
-                    rect.x(),
-                    rect.y(),
-                    size.width(),
-                    size.height()
-                )
-
-                painter.setWindow(
-                    pixmap.rect()
-                )
-
-                painter.drawPixmap(
-                    0,
-                    0,
-                    pixmap
-                )
+                painter.setViewport(rect.x(), rect.y(), size.width(), size.height())
+                painter.setWindow(pixmap.rect())
+                painter.drawPixmap(0, 0, pixmap)
