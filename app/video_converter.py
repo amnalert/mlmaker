@@ -209,17 +209,9 @@ class VideoConverterFFMPEG:
         )
 
         output_pattern = (
-            save_location / "frame%08d.jpg"
+            save_location / f"{target_name:08d}.jpg"
         )
 
-        # FFmpeg's select filter.
-        #
-        # n starts at 0, so:
-        #
-        # every 1 frame -> all frames
-        # every 2 frames -> 0, 2, 4, 6...
-        # every 4 frames -> 0, 4, 8, 12...
-        #
         select_filter = (
             f"select='not(mod(n\\,{num_frames_add_round}))'"
         )
