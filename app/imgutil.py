@@ -3,7 +3,8 @@ from PySide6.QtCore import Qt, QPoint, QEvent, QRectF, QDir, Slot
 from PySide6.QtGui import QKeySequence, QBrush, QPainter, QPolygonF, QPixmap, QFont, QKeyEvent, QPen, QColor, QPalette, QImageReader, QGuiApplication, QColorSpace, QAction, QImageWriter
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from pathlib import Path
-import shutil, json
+import shutil, json, os
+from PIL import Image
 
 INSTALL_LOCATION = Path(__file__).resolve().parent.parent
 
@@ -110,7 +111,6 @@ class ImageContainer(QWidget):
             right_layout.addWidget(self.change_annotation_type, alignment=(Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight))
 
     def view_image(self, img, prj, img_list):
-
         self.current_image = Path(img)
         self.images = img_list
 
@@ -126,10 +126,13 @@ class ImageContainer(QWidget):
         )
 
         if self.annotating:
+            self.sam_labels_json = Path(self.project) / "image_labels" / "sam_labels.json"
+            self.sam_labels_json.touch()
 
             self.species = self.controller.home.project_classes
             self.img_labelling_controls.species = self.species
             self.img_labelling_controls.project = self.project
+            self.img_labelling_controls.sam_labels_json = self.sam_labels_json 
 
             label_folder = prj / "image_labels"
             if img.parent.name != "image_uploads":
@@ -1265,6 +1268,31 @@ class ImageLabellingControls(QWidget):
         elif self.annotation_type == "SAM":
             if len(self.sam_points) <= 2:
                 return
+            if os.path.getsize(self.sam_labels_json) > 0:
+                with open(self.sam_labels_json, "r") as f:
+                    prev_data = json.load(f)
+            else:
+                # default structure
+                prev_data = {"images": [], "annotations": [], "categories": [{"id": 0, "name": "background"}, {"id": 1, "name": "object"}]}
+
+            next_image_id = max([img["id"] for img in prev_data["images"]], default=0) + 1
+            next_annot_id = max([ann["id"] for ann in prev_data["annotations"]], default=0) + 1
+
+            with Image.open(self.parents.current_image) as img:
+                width, height = img.size
+
+            new_image = {
+                "id": next_image_id,
+                "file_name": str(self.parents.current_image.stem),
+                "width": width,
+                "height": height
+            }
+            new_annot = {
+                "id": next_annot_id,
+                "image_id": next_image_id,
+                "category_id": 1,
+                
+            }
 
             json_data = {
                 "images": [
@@ -1438,16 +1466,9 @@ class ImageLabellingControls(QWidget):
 
         self.boxes_lines[index] = new_label
 
-        with open(
-            self.image_label_file,
-            "w"
-        ) as f:
-
+        with open(self.image_label_file, "w") as f:
             for box in self.boxes_lines:
-
-                f.write(
-                    f"{box}\n"
-                )
+                f.write(f"{box}\n")
 
         self.load_saved_boxes(
             self.image_label_file
@@ -1467,31 +1488,18 @@ class ImageLabellingControls(QWidget):
             return # WIP
 
     def eventFilter(self, watched, event):
-
         if watched == self.parent_label:
-            if event.type() in (
-                QEvent.Type.Resize,
-                QEvent.Type.Move,
-                QEvent.Type.Show,
-                QEvent.Type.Paint
-            ):
-
+            if event.type() in (QEvent.Type.Resize, QEvent.Type.Move, QEvent.Type.Show, QEvent.Type.Paint):
                 self._sync_geometry()
                 self.update()
 
         else:
             if isinstance(watched, QWidget):
-                box_label = watched.property(
-                    "box_label"
-                )
+                box_label = watched.property("box_label")
 
                 if box_label is not None:
-
                     if event.type() == QEvent.Type.Enter:
-
-                        self.hovered_box_label = (
-                            box_label
-                        )
+                        self.hovered_box_label = box_label
 
                         watched.setStyleSheet(
                             "QWidget {"
