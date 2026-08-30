@@ -42,7 +42,7 @@ class ImageContainer(QWidget):
 
         if self.annotating:
             self.back_button = QPushButton("Back")
-            self.back_button.clicked.connect(lambda: (self.controller.switch_page(2), self.parents.load_saved_images(self.project, self.parents.username, self.parents.uuid)))
+            self.back_button.clicked.connect(lambda: (self.controller.switch_page(2), self.parents.load_saved_images(self.project, self.parents.username, self.parents.user_folder, self.parents.uuid)))
         else:
             self.back_button = QPushButton("Menu")
             self.back_button.clicked.connect(self.parents.menu_dialog.show)
@@ -105,7 +105,6 @@ class ImageContainer(QWidget):
             right_layout.addWidget(self.scroll_boxes, stretch=1)
             right_layout.addWidget(self.change_default_class_btn)
             right_layout.addWidget(self.show_all_boxes_btn, alignment=(Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter))
-
             right_layout.addWidget(self.annotation_type_label, alignment=(Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight))
             right_layout.addWidget(self.change_annotation_type, alignment=(Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight))
 
@@ -813,10 +812,11 @@ class ImageLabellingControls(QWidget):
         # Actions
         self.undo_action = QAction("Undo", self)
         self.undo_action.setShortcut(QKeySequence.StandardKey.Undo) # Ctrl + Z
-        self.undo_action.triggered.connect(self.undo_sam_point) # Ctrl + Y
+        self.undo_action.triggered.connect(self.undo_label) # Ctrl + Y
 
         self.redo_action = QAction("Redo", self)
         self.redo_action.setShortcut(QKeySequence.StandardKey.Redo)
+        self.redo_action.triggered.connect(self.redo_label)
 
         self.tmp_boxes = [] # saved undo boxes, can redo while still on the same image
         self.tmp_sam_points = [] # saved undo points, can redo while that label still being drawn
@@ -926,11 +926,6 @@ class ImageLabellingControls(QWidget):
     def keyPressEvent(self, event: QKeyEvent):
 
         if event.key() == Qt.Key.Key_Escape:
-            # if previewing sam label just go back to editing label
-            if self.ready_sam:
-                self.ready_sam = False
-                return
-
             self.reset_box()
             self.update()
 
@@ -953,21 +948,6 @@ class ImageLabellingControls(QWidget):
                         self.parents.img_index - 1
                     ]
                 )
-
-        elif event.key() == Qt.Key.Key_Return:
-            if self.annotation_type == "SAM":
-                if len(self.sam_points) < 3:
-                    print("[ImageLabellingControls] Please pick at least 3 points before trying to save a SAM label")
-                    return
-                if self.ready_sam == False:
-                    print("[ImageLabellingControls] Enter key received: Previewing SAM polygon label")
-                    self.ready_sam = True # tells painter to draw line between first and last point, and stop drawing to mouse
-                else:
-                    print("[ImageLabellingControls] Enter key received: Saving SAM label")
-                    self.ready_sam = False
-                    def_class = self.default_class if self.default_class != "none" else self.species[0] if self.species else "none"
-                    self.write_box_data(self.sam_points, def_class)
-            self.update()
 
         else:
             super().keyPressEvent(event)
@@ -1032,8 +1012,6 @@ class ImageLabellingControls(QWidget):
                     self.current_box = [(-1, -1), (-1, -1)]
 
             elif self.annotation_type == "SAM":
-                if self.ready_sam:
-                    return
                 self.sam_points.append((img_x, img_y))
                 self.sam_points_label.setText(f"Points: {len(self.sam_points)}")
                         
@@ -1046,7 +1024,7 @@ class ImageLabellingControls(QWidget):
 
         event.accept()
 
-    def undo_sam_point(self):
+    def undo_label(self):
         print("[ImageLabellingControls] Ctrl+Z Received, undoing last action.")
 
         # remove last sam point
@@ -1058,7 +1036,7 @@ class ImageLabellingControls(QWidget):
             self.tmp_boxes.append(self.boxes_lines.pop())
             self.delete_label(self.tmp_boxes[-1])
 
-    def redo_sam_point(self):
+    def redo_label(self):
         print("[ImageLabellingControls] Ctrl+Y(or Ctrl+Shift+Z) Received, redoing last action")
 
         # replace from tmp_sam_points
@@ -1105,6 +1083,7 @@ class ImageLabellingControls(QWidget):
             painter.drawLine(clamped_x, y_offset, clamped_x, y_offset + draw_h)
 
             if self.annotation_type == "YOLO":
+                pen.setWidth(2)
                 if self.current_box[0] != (-1, -1):
 
                     p1x_img, p1y_img = self.current_box[0]
@@ -1119,50 +1098,23 @@ class ImageLabellingControls(QWidget):
 
                     painter.drawRect(QRectF(rect_x, rect_y, rect_w, rect_h))
             elif self.annotation_type == "SAM":
-                if len(self.sam_points) == 0:
-                    return
-
-                if self.ready_sam:
-                    # preview label
-                    points = [QPoint(*p) for p in self.sam_points]
-                    polygon = QPolygonF(points)
-                    color = QColor(self.colors[self.color_index])
-                    color.setAlpha(128)
-                    fill_brush = QBrush(color, Qt.BrushStyle.SolidPattern)
-                    painter.setBrush(fill_brush)
-                    painter.drawPolygon(polygon)
-
-                else:
-                    # draw a line from the last point to the mouse
-                    painter.drawLine(QPoint(*self.sam_points[-1]), QPoint(self.mouse_pos))
-                    # draw lines between other points
-                    prev_point = QPoint(0, 0)
-                    if len(self.sam_points) > 1:
-                        for p in self.sam_points:
-                            point = QPoint(*p)
-                            if not prev_point == QPoint(0, 0):
-                                painter.drawLine(prev_point, point)
-                            prev_point = point
+                pen.setWidth(8)
+                pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+                painter.setPen(pen)
+                for point in self.sam_points:
+                    px, py = point
+                    wx, wy = self.image_to_widget_coords(px, py)
+                    painter.drawPoint(wx, wy)
+                print(f"Drawing points at {self.sam_points}")
 
         if self.hovered_box_label is not None:
             if self.annotation_type == "YOLO":
                 self._draw_box_from_label(painter, self.hovered_box_label, QColor("#ffd93d"), 3)
-            elif self.annotation_type == "SAM":
-                return # WIP
 
         if self.showing_all_boxes:
             if self.annotation_type == "YOLO":
                 for box_label in self.boxes_lines:
                     self._draw_box_from_label(painter, box_label, QColor("#00ff00"), 2)
-            elif self.annotation_type == "SAM":
-                return # WIP
-
-    def _draw_sam_label(self, painter, label_json, color, width=2):
-        try:
-            with open(label_json, "a"):
-                return # WIP
-        except ValueError:
-            return
 
     def _draw_box_from_label(self, painter, label, color, width=2):
         try:
@@ -1261,41 +1213,6 @@ class ImageLabellingControls(QWidget):
                     f"{norm_w} "
                     f"{norm_h}\n"
                 )
-
-        elif self.annotation_type == "SAM":
-            if len(self.sam_points) <= 2:
-                return
-
-            json_data = {
-                "images": [
-                    {
-                        "id": 1,
-                        "file_name": {self.parents.current_image.stem},
-                        "width": 1, # actual image width
-                        "height": 1, # actual image height
-                    }
-                ],
-                "annoations": [
-                    {
-                        "id": 1, # each id matches the id for its image
-                        "image_id": 1,
-                        "category_id": 1,
-                        "bbox": [], # [x_min, y_min, width, height]
-                        "segmentation": [[coord for pt in self.sam_points for coord in pt]], # polygon points [x1, y1, x2, y2...]
-                        "iscrowd": 0 # 0 for single object, 1 for cluster or 'crowd' of objects that can't be easily separated individually
-                    }
-                ],
-                "categories": [
-                    {
-                        "id": 1,
-                        "name": "fish" 
-                    }
-                ]
-            }
-            self.sam_labels_json = Path(self.project) / "image_labels" / "sam_labels.json"
-            self.sam_labels_json.touch()
-            with open(self.sam_labels_json, "a") as f:
-                json.dump(json_data, f, indent=4)
 
         self.reset_box()
         self.load_saved_boxes(self.image_label_file)

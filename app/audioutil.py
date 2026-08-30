@@ -123,6 +123,8 @@ class MusicHandler(QWidget):
                 self.player.play()
 
     def skip_song(self):
+        self.play_button.setIcon(self.pause_button_icon)
+
         self.song_index += 1
         self.reset_source()
         

@@ -5,10 +5,11 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import QSize, Qt, QObject, Signal, Slot, QThread, QTimer
 from PySide6.QtGui import QPixmap, QIcon, QCursor, QFont
-import math
+import math, json
 from pathlib import Path
 
 from dataloader import UploadFiles
+from sam_handling import SAMPass
 from tcp_manager import TCPManager
 
 INSTALL_LOCATION = Path(__file__).resolve().parent.parent
@@ -297,7 +298,7 @@ class ProjectView(QMainWindow):
         self.page_layout.addWidget(self.tcp_connect_button)
 
         self.mlayout.addLayout(self.page_layout)
-
+        
     def tcp_button(self):
         self.controller.network_page.receive_data(
             self.username,
@@ -305,11 +306,12 @@ class ProjectView(QMainWindow):
         )
         self.controller.switch_page(5)
 
-    def load_saved_images(self, prj, username, prj_uuid):
+    def load_saved_images(self, prj, username, user_folder, prj_uuid):
         if self._load_thread is not None:
             return
 
         self.username = username
+        self.user_folder = user_folder
         self.user_folder = Path(INSTALL_LOCATION) / "users" / username
         self.prj_folder = self.user_folder / Path(prj)
         self.current_project = self.prj_folder
@@ -538,7 +540,7 @@ class ProjectView(QMainWindow):
         info.setContentsMargins(0, 0, 0, 0)
 
         info.addWidget(
-            QLabel(f"Images Needing FP: {len(self.needs_fp)}")
+            QLabel(f"Images Needing SAM Pass: {len(self.needs_fp)}")
         )
 
         delete_button = QPushButton("Delete")
@@ -567,10 +569,24 @@ class ProjectView(QMainWindow):
                 )
             )
 
-        button.clicked.connect(self._open_first_pass)
+        button.clicked.connect(self.sam_pass)
 
         layout.addWidget(button)
         self.scroll_layout.addWidget(widget, row, column)
+
+    def sam_pass(self):
+        user_df = self.user_folder / "user_data.json"
+        user_df.touch()
+        with open(user_df, "r") as f:
+            data = json.load(f)
+            if "default_sam_size" in data[self.username]:
+                default_sam_size = str(data[self.username]["default_sam_size"])
+            else:
+                default_sam_size = None
+        if not hasattr(self, "sam_passer"):
+            self.sampasser = SAMPass(self, self.controller)
+
+        self.sampasser.begin_sam_pass(self.needs_fp, self.current_project, self.username, user_df, default_sam_size)
 
     def _add_image_widget(self, image, row, column, thumb_width, thumb_height):
         widget = QWidget()
@@ -646,15 +662,6 @@ class ProjectView(QMainWindow):
             / f"{relative.stem}.txt"
         )
 
-    def _open_first_pass(self):
-        self.controller.switch_page(6)
-        self.controller.first_pass_page.begin_pass(
-            self.needs_fp.copy(),
-            self.current_project,
-            self.user_folder,
-            self.uuid
-        )
-
     def delete_this_image(self, image):
         image = Path(image)
 
@@ -665,8 +672,7 @@ class ProjectView(QMainWindow):
             self,
             "Remove Image",
             f"Are you sure you want to remove {image.name} from the project?",
-            QMessageBox.StandardButton.Yes |
-            QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )
 

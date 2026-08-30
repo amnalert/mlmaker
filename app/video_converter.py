@@ -128,10 +128,7 @@ class VideoConverterFFMPEG:
             f"{num_frames_add_round} frame(s)"
         )
 
-        # ---------------------------------------------------------
         # Large video handling
-        # ---------------------------------------------------------
-
         #one_gib = 1024 ** 3
         #
         #if video.stat().st_size > one_gib:
@@ -151,10 +148,6 @@ class VideoConverterFFMPEG:
         #        frame_keep_percentage,
         #        output_name
         #    )
-
-        # ---------------------------------------------------------
-        # Normal conversion
-        # ---------------------------------------------------------
 
         total_frames = 0
 
@@ -192,12 +185,7 @@ class VideoConverterFFMPEG:
         fp_txt = Path(prj) / "needs_first_pass.txt"
 
         target_name = output_name or video.stem
-
-        save_location = (
-            Path(prj)
-            / "image_uploads"
-            / target_name
-        )
+        save_location = Path(prj) / "image_uploads" / target_name
 
         print(
             f"[VideoConverter] save_location={save_location}"
@@ -208,9 +196,7 @@ class VideoConverterFFMPEG:
             exist_ok=True
         )
 
-        output_pattern = (
-            save_location / f"{target_name:08d}.jpg"
-        )
+        output_pattern = save_location / f"{target_name}_%08d.jpg"
 
         select_filter = (
             f"select='not(mod(n\\,{num_frames_add_round}))'"
@@ -219,30 +205,13 @@ class VideoConverterFFMPEG:
         ffmpeg_cmd = [
             "ffmpeg",
             "-y",
-
-            "-i",
-            str(video),
-
-            "-vf",
-            select_filter,
-
-            "-q:v",
-            "2",
-
-            "-fps_mode",
-            "vfr",
-
-            # Send machine-readable progress to stderr.
-            "-progress",
-            "pipe:2",
-
-            # Give us progress updates frequently.
-            "-stats_period",
-            "0.5",
-
-            # Don't print the normal FFmpeg status display.
+            "-i", str(video),
+            "-vf", select_filter,
+            "-q:v", "2",
+            "-fps_mode", "vfr",
+            "-progress", "pipe:2",
+            "-stats_period", "0.5",
             "-nostats",
-
             str(output_pattern)
         ]
 
@@ -332,12 +301,9 @@ class VideoConverterFFMPEG:
 
             return []
 
-        # ---------------------------------------------------------
-        # FFmpeg is completely finished.
-        # ---------------------------------------------------------
-
+        globber = f"{target_name}_*.jpg"
         frame_final_locations = sorted(
-            save_location.glob("frame*.jpg")
+            save_location.glob(globber)
         )
 
         print(
@@ -345,24 +311,10 @@ class VideoConverterFFMPEG:
             f"kept={len(frame_final_locations)}"
         )
 
-        # ---------------------------------------------------------
-        # Add generated frames to needs_first_pass.txt
-        # ---------------------------------------------------------
-
-        with open(
-            fp_txt,
-            "a",
-            encoding="utf-8"
-        ) as f:
-
+        with open(fp_txt, "a", encoding="utf-8") as f:
             for frame in frame_final_locations:
-                relative_frame = (
-                    frame.relative_to(prj)
-                )
-
-                f.write(
-                    f"{relative_frame}\n"
-                )
+                relative_frame = frame.relative_to(prj)
+                f.write(f"{relative_frame}\n")
 
         return frame_final_locations
 
@@ -375,10 +327,6 @@ class VideoConverterFFMPEG:
     ):
         invideo = Path(invideo)
         prj = Path(prj)
-
-        # ---------------------------------------------------------
-        # Temporary segment directory
-        # ---------------------------------------------------------
 
         split_dir = (
             prj /
@@ -458,10 +406,6 @@ class VideoConverterFFMPEG:
             )
             return []
 
-        # ---------------------------------------------------------
-        # Find generated segments
-        # ---------------------------------------------------------
-
         split_videos = sorted(
             split_dir.glob(
                 f"{invideo.stem}_*"
@@ -480,10 +424,6 @@ class VideoConverterFFMPEG:
                 "no video segments."
             )
             return []
-
-        # ---------------------------------------------------------
-        # Process each segment
-        # ---------------------------------------------------------
 
         all_frames = []
 
@@ -506,10 +446,6 @@ class VideoConverterFFMPEG:
 
             if frames:
                 all_frames.extend(frames)
-
-        # ---------------------------------------------------------
-        # Remove temporary segments
-        # ---------------------------------------------------------
 
         try:
             shutil.rmtree(split_dir)

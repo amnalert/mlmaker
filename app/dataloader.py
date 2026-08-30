@@ -8,6 +8,8 @@ import tempfile
 from video_converter import VideoConverterFFMPEG
 from box_manager import UploadFromBox
 
+INSTALL_LOCATION = Path(__file__).resolve().parent.parent
+
 class VideoConvertWorker(QObject):
     finished = Signal(object, object)
     failed = Signal(str, object)
@@ -82,7 +84,7 @@ class UploadFiles(QPushButton):
         self.controller = controller
         self.parent_widget = parents
 
-        self.project = ""
+        self.project = Path(INSTALL_LOCATION)
         self.project_uuid = None
         self.image_uploads = ""
 
@@ -101,103 +103,46 @@ class UploadFiles(QPushButton):
         self.clicked.connect(self.open_dialog)
 
     def open_dialog(self):
-        self.project = Path(
-            self.parent_widget.current_project
-        )
+        self.project = Path(self.parent_widget.current_project)
+        self.project_uuid = self.parent_widget.uuid
+        self.image_uploads = self.project / "image_uploads"
 
-        self.project_uuid = (
-            self.parent_widget.uuid
-        )
+        singlet_location = self.image_uploads / "singlet_images"
+        singlet_location.mkdir(parents=True, exist_ok=True)
 
         files = ImageLoader().load_files(self)
-
-        self.image_uploads = (
-            self.project / "image_uploads"
-        )
-
-        singlet_location = (
-            self.image_uploads /
-            "singlet_images"
-        )
-
-        singlet_location.mkdir(
-            parents=True,
-            exist_ok=True
-        )
-
         if not files:
             return
-
+        
         for file in files:
             path = Path(file)
-
+            
             if path.suffix.lower() == ".zip":
-                extracted_files = extract_zip_contents(
-                    path,
-                    self.image_uploads,
-                    self.image_uploads
-                )
+                extracted_files = extract_zip_contents(path, self.image_uploads, self.image_uploads)
 
                 for destination in extracted_files:
+                    if (destination.suffix.lower() in VIDEO_EXTENSIONS):
+                        self.video_queue.append((destination, Path(self.project), destination.stem))
 
-                    if (
-                        destination.suffix.lower()
-                        in VIDEO_EXTENSIONS
-                    ):
-                        self.video_queue.append(
-                            (
-                                destination,
-                                Path(self.project),
-                                destination.stem
-                            )
-                        )
+                    elif (destination.suffix.lower() in IMAGE_EXTENSIONS):
+                        self.update_fp_file(destination)
+                        self.images.append(destination)
 
-                    elif (
-                        destination.suffix.lower()
-                        in IMAGE_EXTENSIONS
-                    ):
-                        self.images.append(
-                            destination
-                        )
-
-            elif (
-                path.suffix.lower()
-                in IMAGE_EXTENSIONS
-            ):
-                dest = (
-                    singlet_location /
-                    path.name
-                )
-
+            elif (path.suffix.lower() in IMAGE_EXTENSIONS):
+                dest = singlet_location / path.name
                 counter = 1
 
                 while dest.exists():
-                    dest = (
-                        singlet_location /
-                        f"{path.stem}_{counter}"
-                        f"{path.suffix}"
-                    )
-
+                    dest = singlet_location / f"{path.stem}_{counter}" / f"{path.suffix}"
                     counter += 1
 
-                shutil.copy2(
-                    path,
-                    dest
-                )
+                shutil.copy2(path, dest)
 
+                self.update_fp_file(dest)
                 self.images.append(dest)
 
-            elif (
-                path.suffix.lower()
-                in VIDEO_EXTENSIONS
-            ):
-                self.video_queue.append(
-                    (
-                        path,
-                        Path(self.project),
-                        path.stem
-                    )
-                )
+            elif (path.suffix.lower() in VIDEO_EXTENSIONS):
+                self.video_queue.append((path, Path(self.project), path.stem))
 
         if self.video_queue:
             self._process_next_video()
@@ -208,8 +153,17 @@ class UploadFiles(QPushButton):
         self.parent_widget.load_saved_images(
             self.project,
             self.parent_widget.username,
+            self.parent_widget.user_folder,
             self.project_uuid
         )
+
+    def update_fp_file(self, image):
+        needs_fp_file = Path(self.project) / "needs_first_pass.txt"
+        lines = needs_fp_file.read_text().strip().splitlines()
+        img_rel_path = Path(image).resolve().relative_to(self.project.resolve()).as_posix()
+        lines.append(img_rel_path)
+
+        needs_fp_file.write_text("\n".join(lines))
 
     def _resolve_video_name(self, video_name):
         base_name = video_name
@@ -476,34 +430,19 @@ class UploadFiles(QPushButton):
                 f"{processed_frames}/?)"
             )
 
-    def _handle_video_result(
-        self,
-        converted_frames,
-        video
-    ):
-        print(
-            "[VideoConverter] Worker reported successful "
-            "conversion."
-        )
+    def _handle_video_result(self, converted_frames, video):
+        print("[VideoConverter] Worker reported successful conversion.")
 
-        frames = [
-            Path(p)
-            for p in converted_frames
-        ]
+        frames = [Path(p) for p in converted_frames]
 
         self.images.extend(frames)
-
         video = Path(video)
 
         try:
             if video.exists():
                 source_directory = video.parent
-
                 if source_directory.exists():
-                    print(
-                        f"[VideoConverter] Video stored at "
-                        f"{source_directory}"
-                    )
+                    print(f"[VideoConverter] Video stored at {source_directory}")
 
         except Exception as e:
             print(
@@ -590,6 +529,7 @@ class UploadFiles(QPushButton):
             lambda: self.parent_widget.load_saved_images(
                 self.project,
                 self.parent_widget.username,
+                self.parent_widget.user_folder,
                 self.project_uuid
             )
         )
@@ -660,7 +600,7 @@ class UploadLabels(QPushButton):
             self.images = []
             self.labels = []
             self.duplicate_labels = []
-            self.parent_widget.load_saved_images(self.project, self.parent_widget.username, self.project_uuid)
+            self.parent_widget.load_saved_images(self.project, self.parent_widget.username, self.parent_widget.user_folder, self.project_uuid)
 
     def _add_extracted_files(self, extracted_files):
         for path in extracted_files:
@@ -668,6 +608,13 @@ class UploadLabels(QPushButton):
                 self.images.append(path)
             elif path.suffix.lower() in LABEL_EXTENSIONS:
                 self.labels.append(path)
+
+    def update_fp_file(self, image):
+        needs_fp_file = Path(self.project) / "needs_first_pass.txt"
+        lines = needs_fp_file.read_text().strip().splitlines()
+        img_rel_path = image.resolve().relative_to(Path(self.project).resolve()).as_posix()
+        lines.append(img_rel_path)
+        needs_fp_file.write_text("\n".join(lines))
 
     def copy_to_project(self, path, type, save_location):
         if type == "images":
@@ -683,6 +630,10 @@ class UploadLabels(QPushButton):
                     new_label_name = f"{dest.stem}{label_ext}"
                     self.labels = [label if label.stem != path.stem else Path(label.parent / new_label_name) for label in self.labels]
                 counter += 1
+
+                # add each path to needs fp file(Path(self.project) / "needs_first_pass.txt") if it is an image file
+                if path.suffix.lower() in IMAGE_EXTENSIONS:
+                    self.update_fp_file(dest)
 
             if path.suffix.lower() in IMAGE_EXTENSIONS:
                 shutil.copy2(path, dest)

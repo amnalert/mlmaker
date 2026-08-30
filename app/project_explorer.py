@@ -378,7 +378,7 @@ class ProjectExplorer(QMainWindow):
 
         self.controller.switch_page(2)
         self.controller.home.load_saved_images(
-            prj, self.user_folder, project_uuid
+            prj, self.username, self.user_folder, project_uuid
         )
 
         if self._image_load_thread is not None and self._image_load_thread.isRunning():
