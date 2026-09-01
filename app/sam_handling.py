@@ -21,6 +21,7 @@ class SAMWorker(QObject):
     status = Signal(str)
 
     prediction = Signal(object)
+    converted = Signal(object)
 
     def __init__(self, model, config, device, img_list, project, outdir):
         super().__init__()
@@ -119,6 +120,41 @@ class SAMWorker(QObject):
             multimask_output=False
         )
 
+    def run_mult_points(self, points, image, obj):
+        sam2 = build_sam2(str(self.config), str(self.model), device=self.device)
+        predictor = SAM2ImagePredictor(sam2)
+
+        print(f"[SAMPredict] image: {image}")
+        cv2image = cv2.imread(str(image))
+        if cv2image is None:
+            return
+        cv2image = cv2.cvtColor(cv2image, cv2.COLOR_BGR2RGB)
+
+        predictor.set_image(cv2image)
+
+        self.status.emit(f"[SAMPredict] Start prediction for multiple points for image {image.name}")
+        point = np.array(points) # points should be in format [[x1, y1], [x2, y2], ...]
+        label = np.full(len(points), obj)
+
+        masks, scores, _ = predictor.predict(
+            point_coords=point,
+            point_labels=label,
+            multimask_output=True
+        )
+
+        best_mask_idx = np.argmax(scores)
+        best_mask = masks[best_mask_idx].astype(np.uint8) * 255
+        self.status.emit(f"[SAMPredict] Best mask confidence score: {scores[best_mask_idx]:.4f}")
+
+        contours, _ = cv2.findContours(best_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        formatted_contours = [c.reshape(-1, 2) for c in contours]
+
+        self.convert_masks(best_mask, cv2image, image, contours)
+
+        self.prediction.emit(formatted_contours)
+        self.finished.emit()
+
+
     def convert_masks(self, masks, image, source_image, t=[]):
         if len(t) > 0:
             mask = masks > 0
@@ -152,8 +188,7 @@ class SAMWorker(QObject):
                 counter += 1
                 outpath = Path(self.outdir) / source_image.stem / f"{source_image.stem}_mask_{counter}.png"
 
-            cv2.imwrite(str(outpath), output)
-
+            self.converted.emit(output)
 
         else:
             for idx, mask_data in enumerate(masks):
@@ -333,7 +368,8 @@ class SAMPass(QWidget):
 # ------------------------------------------------------------------------------
 
 class SAMPredict(QWidget):
-    prediction = Signal(object, object, object)
+    prediction = Signal(object, object)
+    converted = Signal(object)
 
     def __init__(self, parents):
         super().__init__()
@@ -355,9 +391,16 @@ class SAMPredict(QWidget):
         self.project = Path(prj)
         self.outdir = prj / "sam_isolated_objects"
 
-        self.start_sam_thread(image, px, py, box, "point", label)
+        self.start_sam_thread(image, [[px, py]], box, label)
 
-    def start_sam_thread(self, image, px, py, box, ltype, label):
+    def analyze_mult_points(self, points, image, label, prj):
+        self.current_image = image
+        self.project = Path(prj)
+        self.outdir = prj / "sam_isolated_objects"
+
+        self.start_sam_thread(image, points, [], label)
+
+    def start_sam_thread(self, image, points, box, label):
         self.sam_thread = QThread()
         self.sam_worker = SAMWorker(
             self.model,
@@ -370,18 +413,19 @@ class SAMPredict(QWidget):
 
         self.sam_worker.moveToThread(self.sam_thread)
 
-        if ltype == "point":
-            if px is None or py is None:
-                return
-            self.sam_thread.started.connect(lambda checked=False, pxx=px, pyy=py, img=image: self.sam_worker.run_point(pxx, pyy, img, label) if self.sam_worker is not None else None)
-        elif ltype == "box":
+        if box:
             if len(box) < 4:
                 return
             self.sam_thread.started.connect(lambda checked=False, boxx=box, img=image: self.sam_worker.run_box(boxx, img) if self.sam_worker is not None else None)
+        elif len(points) > 1:
+            self.sam_thread.started.connect(lambda checked=False, points=points, img=image: self.sam_worker.run_mult_points(points, img, label) if self.sam_worker is not None else None)
+        else:
+            self.sam_thread.started.connect(lambda checked=False, pxx=points[0][0], pyy=points[0][1], img=image: self.sam_worker.run_point(pxx, pyy, img, label) if self.sam_worker is not None else None)
 
         self.sam_worker.status.connect(print)
 
-        self.sam_worker.prediction.connect(lambda prediction, pxx=px, pyy=py: self.prediction.emit(prediction, pxx, pyy))
+        self.sam_worker.prediction.connect(lambda prediction, points=points: self.prediction.emit(prediction, points))
+        self.sam_worker.converted.connect(lambda converted_image: self.converted.emit(converted_image))
 
         self.sam_worker.finished.connect(self.sam_finished)
         self.sam_worker.failed.connect(self.sam_failed)

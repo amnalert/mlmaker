@@ -125,7 +125,6 @@ class UploadFiles(QPushButton):
                         self.video_queue.append((destination, Path(self.project), destination.stem))
 
                     elif (destination.suffix.lower() in IMAGE_EXTENSIONS):
-                        self.update_fp_file(destination)
                         self.images.append(destination)
 
             elif (path.suffix.lower() in IMAGE_EXTENSIONS):
@@ -138,7 +137,6 @@ class UploadFiles(QPushButton):
 
                 shutil.copy2(path, dest)
 
-                self.update_fp_file(dest)
                 self.images.append(dest)
 
             elif (path.suffix.lower() in VIDEO_EXTENSIONS):
