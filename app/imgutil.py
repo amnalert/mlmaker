@@ -1079,7 +1079,7 @@ class ImageLabellingControls(QWidget):
             return
         self.is_predicting = True
         img = self.parents.current_image
-        self.sam_predictor.analyze_point(px, py, box=None, image=img, label=1)
+        self.sam_predictor.analyze_point(px, py, box=None, image=img, label=1, prj=self.project)
         self.sam_predictor.prediction.connect(self.receive_sam_prediction)
 
     def receive_sam_prediction(self, contours, px, py):

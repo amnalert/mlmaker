@@ -97,8 +97,11 @@ class SAMWorker(QObject):
         best_mask = masks[best_mask_idx].astype(np.uint8) * 255
         self.status.emit(f"[SAMPredict] Best mask confidence score: {scores[best_mask_idx]:.4f}")
 
+
         contours, _ = cv2.findContours(best_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         formatted_contours = [c.reshape(-1, 2) for c in contours]
+
+        self.convert_masks(best_mask, cv2image, image, contours)
 
         self.prediction.emit(formatted_contours)
         self.finished.emit()
@@ -116,14 +119,15 @@ class SAMWorker(QObject):
             multimask_output=False
         )
 
-    def convert_masks(self, masks, image, source_image):
-        for idx, mask_data in enumerate(masks):
-            mask = mask_data["segmentation"]
+    def convert_masks(self, masks, image, source_image, t=[]):
+        if len(t) > 0:
+            mask = masks > 0
 
             fg_object = np.zeros_like(image)
             fg_object[mask] = image[mask]
 
-            x, y, w, h = [ int(v) for v in mask_data["bbox"] ]
+            all_points = np.vstack(t)
+            x, y, w, h = cv2.boundingRect(all_points)
 
             cropped_fg = fg_object[y:y+h, x:x+w]
             cropped_mask = mask[y:y+h, x:x+w]
@@ -142,7 +146,42 @@ class SAMWorker(QObject):
             outpath = Path(self.outdir) / source_image.stem
             outpath.mkdir(parents=True, exist_ok=True)
 
-            cv2.imwrite(str(self.outdir / source_image.stem / f"{source_image.stem}_mask_{idx:03d}.png"), output)
+            counter = 1
+            outpath = Path(self.outdir) / source_image.stem / f"{source_image.stem}_mask_1.png"
+            while outpath.exists():
+                counter += 1
+                outpath = Path(self.outdir) / source_image.stem / f"{source_image.stem}_mask_{counter}.png"
+
+            cv2.imwrite(str(outpath), output)
+
+
+        else:
+            for idx, mask_data in enumerate(masks):
+                mask = mask_data["segmentation"]
+
+                fg_object = np.zeros_like(image)
+                fg_object[mask] = image[mask]
+
+                x, y, w, h = [ int(v) for v in mask_data["bbox"] ]
+
+                cropped_fg = fg_object[y:y+h, x:x+w]
+                cropped_mask = mask[y:y+h, x:x+w]
+
+                max_side = max(w, h)
+
+                raw_noise = np.random.choice([0, 255], size=(max_side, max_side), p=[0.5, 0.5]).astype(np.uint8)
+                square_static = cv2.cvtColor(raw_noise, cv2.COLOR_GRAY2RGB)
+
+                pad_x = (max_side - w) // 2
+                pad_y = (max_side - h) // 2
+
+                square_static[pad_y:pad_y+h, pad_x:pad_x+w][cropped_mask] = cropped_fg[cropped_mask]
+
+                output = cv2.cvtColor(square_static, cv2.COLOR_RGB2BGR)
+                outpath = Path(self.outdir) / source_image.stem
+                outpath.mkdir(parents=True, exist_ok=True)
+
+                cv2.imwrite(str(self.outdir / source_image.stem / f"{source_image.stem}_mask_{idx:03d}.png"), output)
 
     def update_fp_file(self, image):
         needs_fp_file = self.project / "needs_first_pass.txt"
@@ -311,18 +350,20 @@ class SAMPredict(QWidget):
 
         self.sam_worker: Optional[SAMWorker]
 
-    def analyze_point(self, px, py, box, image, label):
+    def analyze_point(self, px, py, box, image, label, prj):
         self.current_image = image
+        self.project = Path(prj)
+        self.outdir = prj / "sam_isolated_objects"
 
-        self.start_sam_thread([image], px, py, box, "point", label)
+        self.start_sam_thread(image, px, py, box, "point", label)
 
-    def start_sam_thread(self, img_list, px, py, box, ltype, label):
+    def start_sam_thread(self, image, px, py, box, ltype, label):
         self.sam_thread = QThread()
         self.sam_worker = SAMWorker(
             self.model,
             self.config,
             self.device,
-            img_list,
+            image,
             self.project,
             self.outdir
         )
@@ -332,11 +373,11 @@ class SAMPredict(QWidget):
         if ltype == "point":
             if px is None or py is None:
                 return
-            self.sam_thread.started.connect(lambda checked=False, pxx=px, pyy=py, img=img_list[0]: self.sam_worker.run_point(pxx, pyy, img, label) if self.sam_worker is not None else None)
+            self.sam_thread.started.connect(lambda checked=False, pxx=px, pyy=py, img=image: self.sam_worker.run_point(pxx, pyy, img, label) if self.sam_worker is not None else None)
         elif ltype == "box":
             if len(box) < 4:
                 return
-            self.sam_thread.started.connect(lambda checked=False, boxx=box, img=img_list[0]: self.sam_worker.run_box(boxx, img) if self.sam_worker is not None else None)
+            self.sam_thread.started.connect(lambda checked=False, boxx=box, img=image: self.sam_worker.run_box(boxx, img) if self.sam_worker is not None else None)
 
         self.sam_worker.status.connect(print)
 
