@@ -1,9 +1,11 @@
 from PySide6.QtWidgets import QApplication, QWidget, QGridLayout, QPushButton, QLabel, QHBoxLayout, QVBoxLayout, QSizePolicy, QMessageBox, QScrollArea, QComboBox, QInputDialog, QDialog
-from PySide6.QtCore import Qt, QPoint, QEvent, QRectF, QDir, Slot
-from PySide6.QtGui import QKeySequence, QBrush, QPainter, QPolygonF, QPixmap, QFont, QKeyEvent, QPen, QColor, QPalette, QImageReader, QGuiApplication, QColorSpace, QAction, QImageWriter
+from PySide6.QtCore import Qt, QPoint, QEvent, QRectF, QDir, Slot, QPointF
+from PySide6.QtGui import QKeySequence, QBrush, QPainter, QPolygonF, QPixmap, QFont, QKeyEvent, QPen, QColor, QPalette, QImageReader, QGuiApplication, QColorSpace, QAction, QImageWriter, QPainterPath
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from pathlib import Path
 import shutil, json
+
+from sam_handling import SAMPredict
 
 INSTALL_LOCATION = Path(__file__).resolve().parent.parent
 
@@ -134,9 +136,12 @@ class ImageContainer(QWidget):
             if img.parent.name != "image_uploads":
                 label_folder /= img.parent.name
 
-            self.image_label_file = label_folder / f"{img.stem}.txt"
-            self.image_label_file.parent.mkdir(parents=True, exist_ok=True)
-            self.image_label_file.touch()
+            if self.img_labelling_controls.annotation_type == "YOLO":
+                self.image_label_file = label_folder / f"{img.stem}.txt"
+                self.image_label_file.parent.mkdir(parents=True, exist_ok=True)
+                self.image_label_file.touch()
+            elif self.img_labelling_controls.annotation_type == "SAM":
+                self.image_label_file = prj / "image_labels" / "sam_labels.json"
 
         self.img_index_lbl.setText(
             f"Image: {self.img_index + 1}/{len(self.images)}"
@@ -172,7 +177,6 @@ class ImageContainer(QWidget):
             )
 
 class FirstPass(QWidget):
-
     def __init__(self, controller):
         super().__init__()
 
@@ -741,7 +745,6 @@ class FirstPass(QWidget):
             event.accept()
 
 class ImageLabellingControls(QWidget):
-
     def __init__(self, parent_label, image_viewer, parents):
         super().__init__(parent_label)
 
@@ -764,7 +767,7 @@ class ImageLabellingControls(QWidget):
         self.sam_points = [] # At least 3 points are required
         self.default_class = "none"
         self.hovered_box_label = None
-        self.showing_all_boxes = False
+        self.showing_all_boxes = True
 
         # Mouse
         self.setMouseTracking(True)
@@ -797,7 +800,7 @@ class ImageLabellingControls(QWidget):
         # Buttons
         self.change_default_class_btn = QPushButton("Change default class")
         self.change_default_class_btn.clicked.connect(self.change_default_class)
-        self.show_all_boxes_btn = QPushButton("Show all boxes")
+        self.show_all_boxes_btn = QPushButton("Hide all boxes")
         self.show_all_boxes_btn.clicked.connect(self._draw_all_boxes)
 
         # Change annotation type: YOLO or SAM
@@ -805,9 +808,6 @@ class ImageLabellingControls(QWidget):
         self.annotation_type_label = QLabel(f"Label Type: {self.annotation_type}")
         self.change_annotation_type = QPushButton("Switch to SAM Labelling")
         self.change_annotation_type.clicked.connect(self.switch_annot_type)
-
-        # Files
-        self.sam_labels_json = Path(INSTALL_LOCATION)
 
         # Actions
         self.undo_action = QAction("Undo", self)
@@ -821,23 +821,43 @@ class ImageLabellingControls(QWidget):
         self.tmp_boxes = [] # saved undo boxes, can redo while still on the same image
         self.tmp_sam_points = [] # saved undo points, can redo while that label still being drawn
 
+        self.sam_predictor = SAMPredict(self)
+        self.is_predicting = False
+        self.is_previewing = False
+        self.contours_list = []
+
         self._sync_geometry()
 
     def switch_annot_type(self):
-        self.ready_sam = False
+        if self.is_predicting or self.is_previewing:
+            QMessageBox.warning(
+                self,
+                "SAMPredict",
+                "SAM is predicting or has the most recent object prediction preview on screen. Please press Escape to cancel the label or Enter/Return to save the label."
+            )
+            return
+        
         self.change_annotation_type.setText(f"Switch to {self.annotation_type} Labelling")
 
         if self.annotation_type == "YOLO":
             self.annotation_type = "SAM"
+            self.annotation_type_label.setText(f"Label Type: {self.annotation_type}")
+            self.image_label_file = Path(self.project) / "image_labels" / "sam_labels.json"
+            self.image_label_file.touch()
             self.box_label_1.hide()
             self.box_label_2.hide()
-            self.reset_box()
+
+            self.load_saved_boxes(self.image_label_file)
+
 
         elif self.annotation_type == "SAM":
             self.annotation_type = "YOLO"
+            self.annotation_type_label.setText(f"Label Type: {self.annotation_type}")
             self.box_label_1.show()
             self.box_label_2.show()
-            self.reset_box()
+
+        self.update()
+        self.reset_box()
 
     def _sync_geometry(self):
         if not self.parent_label.isVisible():
@@ -873,10 +893,6 @@ class ImageLabellingControls(QWidget):
         return (0, 0, width, height)
 
     def widget_to_image_coords(self, wx, wy):
-        """
-        Convert coordinates from the annotation overlay to
-        original image pixel coordinates.
-        """
         image = self.image_viewer.image()
         if image is None or image.isNull():
             return wx, wy
@@ -901,10 +917,6 @@ class ImageLabellingControls(QWidget):
         return img_x, img_y
 
     def image_to_widget_coords(self, ix, iy):
-        """
-        Convert original image pixel coordinates to
-        annotation overlay coordinates.
-        """
         image = self.image_viewer.image()
         if image is None or image.isNull():
             return ix, iy
@@ -924,12 +936,27 @@ class ImageLabellingControls(QWidget):
         return wx, wy
 
     def keyPressEvent(self, event: QKeyEvent):
+        if self.is_predicting:
+            return
 
         if event.key() == Qt.Key.Key_Escape:
+            if self.is_previewing:
+                self.contours_list.pop()
+                self.is_previewing = False
             self.reset_box()
             self.update()
 
         elif event.key() == Qt.Key.Key_Right:
+            if self.is_previewing:
+                QMessageBox.warning(
+                    self,
+                    "SAMPredict",
+                    "SAM has the most recent object prediction preview on screen. Please press Escape to cancel the label or Enter/Return to save the label."
+                )
+                return
+            if self.contours_list:
+                self.write_sam_data() # autosave instead of destroy
+
             self.reset_box()
             try:
                 self.parents.controller.home.inspect_img(
@@ -941,6 +968,13 @@ class ImageLabellingControls(QWidget):
                 pass
 
         elif event.key() == Qt.Key.Key_Left:
+            if self.is_previewing:
+                QMessageBox.warning(
+                    self,
+                    "SAMPredict",
+                    "SAM has the most recent object prediction preview on screen. Please press Escape to cancel the label or Enter/Return to save the label."
+                )
+                return
             self.reset_box()
             if self.parents.img_index >= 1:
                 self.parents.controller.home.inspect_img(
@@ -948,6 +982,12 @@ class ImageLabellingControls(QWidget):
                         self.parents.img_index - 1
                     ]
                 )
+
+        elif event.key() == Qt.Key.Key_Return:
+            # save previewed sam thingy
+            if self.annotation_type == "SAM" and self.is_previewing:
+                self.write_sam_data()
+            self.is_previewing = False
 
         else:
             super().keyPressEvent(event)
@@ -975,6 +1015,15 @@ class ImageLabellingControls(QWidget):
         event.accept()
 
     def mousePressEvent(self, event):
+        if self.is_previewing:
+            QMessageBox.warning(
+                self,
+                "SAMPredict",
+                "SAM has the most recent object prediction preview on screen. Please press Escape to cancel the label or Enter/Return to save the label. "
+                "To disable this message in the future for this app instance, please (not implemented yet)"
+            )
+            return
+
         pos = event.position().toPoint()
 
         x = pos.x()
@@ -1008,12 +1057,13 @@ class ImageLabellingControls(QWidget):
                     self.current_box[1] = (img_x, img_y)
                     self.box_label_2.setText(f"Point 2: ({img_x}, {img_y})")
 
-                    self.write_box_data(self.current_box, def_class)
+                    self.write_label_data(self.current_box, def_class)
                     self.current_box = [(-1, -1), (-1, -1)]
 
             elif self.annotation_type == "SAM":
                 self.sam_points.append((img_x, img_y))
                 self.sam_points_label.setText(f"Points: {len(self.sam_points)}")
+                self.start_sam_prediction(img_x, img_y)
                         
         self.update()
         event.accept()
@@ -1023,6 +1073,20 @@ class ImageLabellingControls(QWidget):
             self.image_viewer._end_pan()
 
         event.accept()
+
+    def start_sam_prediction(self, px, py):
+        if self.is_predicting:
+            return
+        self.is_predicting = True
+        img = self.parents.current_image
+        self.sam_predictor.analyze_point(px, py, box=None, image=img, label=1)
+        self.sam_predictor.prediction.connect(self.receive_sam_prediction)
+
+    def receive_sam_prediction(self, contours, px, py):
+        self.is_predicting = False
+        self.is_previewing = True
+        self.contours_list.append([px, py, contours])
+        self.update()
 
     def undo_label(self):
         print("[ImageLabellingControls] Ctrl+Z Received, undoing last action.")
@@ -1049,13 +1113,16 @@ class ImageLabellingControls(QWidget):
 
             def_class = self.default_class if self.default_class != "none" else self.species[0] if self.species else "none"
 
-            self.write_box_data(self.boxes_lines[-1], def_class)
+            self.write_label_data(self.boxes_lines[-1], def_class)
 
     def clear_tmps(self):
         self.tmp_sam_points.clear()
         self.tmp_boxes.clear()
 
     def paintEvent(self, event):
+        if self.is_predicting:
+            return
+
         pixmap = self.parent_label.pixmap()
         if not pixmap or pixmap.isNull():
             return
@@ -1105,7 +1172,38 @@ class ImageLabellingControls(QWidget):
                     px, py = point
                     wx, wy = self.image_to_widget_coords(px, py)
                     painter.drawPoint(wx, wy)
-                print(f"Drawing points at {self.sam_points}")
+
+                if len(self.contours_list) > 0:
+                    pen.setWidth(2)
+                    brush = QBrush(QColor(0, 255, 0, 80))
+                    painter.setPen(pen)
+                    painter.setBrush(brush)
+
+                    path = QPainterPath()
+                    if self.showing_all_boxes:
+                        for contours_info in self.contours_list:
+                            px = contours_info[0]
+                            py = contours_info[1]
+                            contours = contours_info[2]
+                            for contour in contours:
+                                if len(contour) < 3:
+                                    continue
+                                poly = QPolygonF([QPointF(float(pt[0]), float(pt[1])) for pt in contour])
+                                path.addPolygon(poly)
+                    else:
+                        # show just most recent
+                        if len(self.contours_list[-1]) < 3:
+                            return
+                        contours_info = self.contours_list[-1]
+                        px = contours_info[0]
+                        py = contours_info[1]
+                        contours = contours_info[2]
+                        poly = QPolygonF([QPoint(int(pt[0]), int(pt[1])) for pt in contours])
+                        path.addPolygon(poly)
+
+                    painter.drawPath(path)
+                    if px and py:
+                        painter.drawPoint(QPoint(px, py))
 
         if self.hovered_box_label is not None:
             if self.annotation_type == "YOLO":
@@ -1161,6 +1259,10 @@ class ImageLabellingControls(QWidget):
 
     def _draw_all_boxes(self):
         self.showing_all_boxes = (not self.showing_all_boxes)
+        if self.showing_all_boxes:
+            self.show_all_boxes_btn.setText("Hide all boxes")
+        else:
+            self.show_all_boxes_btn.setText("Show all boxes")
         self.update()
 
     def reset_box(self):
@@ -1168,12 +1270,8 @@ class ImageLabellingControls(QWidget):
             self.current_box = [ (-1, -1), (-1, -1) ]
             self.box_label_1.setText("Point 1: (0, 0)")
             self.box_label_2.setText("Point 2: (0, 0)")
-        if self.annotation_type == "SAM":
-            self.sam_points.clear()
-            self.sam_points_label.setText("Points: 0")
-            self.tmp_sam_points.clear()
 
-    def write_box_data(self, label, label_class):
+    def write_label_data(self, label, label_class):
         if self.annotation_type == "YOLO":
             if label[0] == (-1, -1) or label[1] == (-1, -1):
                 return
@@ -1217,18 +1315,86 @@ class ImageLabellingControls(QWidget):
         self.reset_box()
         self.load_saved_boxes(self.image_label_file)
 
+    def write_sam_data(self):
+        if self.annotation_type == "SAM":
+            try:
+                with open(self.image_label_file, "r") as f:
+                    data = json.load(f)
+            except (FileNotFoundError, json.JSONDecodeError):
+                data = {"images": []}
+
+            if "images" not in data:
+                data["images"] = []
+
+            img_path = str(Path(self.parents.current_image).resolve().relative_to(self.parents.project.resolve()).as_posix())
+            image_data = next((img for img in data["images"] if img["image"] == img_path), None)
+
+            if image_data is None:
+                image_data = {"image": img_path, "objects": []}
+                data["images"].append(image_data)
+
+            if self.sam_points and self.contours_list:
+                px, py = self.sam_points[-1]
+                contours_info = self.contours_list[-1]
+                contours = contours_info[2]
+
+                obj_data = {
+                    "id": len(image_data["objects"]),
+                    "points": [{
+                        "x": int(px),
+                        "y": int(py),
+                        "label": self.default_class,
+                        "contour": contours
+                    }]
+                }
+
+                image_data["objects"].append(obj_data)
+
+                with open(self.image_label_file, "w") as f:
+                    json.dump(data, f, indent=4, default=lambda obj: obj.tolist())
+
+        self.reset_box()
+        self.load_saved_boxes(self.image_label_file)
+
     def load_saved_boxes(self, file):
         self.image_label_file = file
-        with open(file, "r") as f:
-            self.boxes_lines = [
-                line for line in f.read().splitlines() if line
-            ]
+
+        if self.annotation_type == "YOLO":
+            try:
+                with open(file, "r") as f:
+                    self.boxes_lines = [line for line in f.read().splitlines() if line]
+            except FileNotFoundError:
+                self.boxes_lines = []
+
+        elif self.annotation_type == "SAM":
+            try:
+                with open(file, "r") as f:
+                    data = json.load(f)
+            except (FileNotFoundError, json.JSONDecodeError):
+                return
+
+            img_path = str(Path(self.parents.current_image).resolve().relative_to(self.parents.project.resolve()).as_posix())
+            images = data.get("images", [])
+            current_image = next((img for img in images if img.get("image") == img_path), None)
+
+            if current_image is None:
+                return
+
+            print(f"[ImageLabellingControls] SAM labels loaded from json for image {img_path}")
+
+            self.sam_points.clear()
+            self.contours_list.clear()
+
+            for obj_data in current_image.get("objects", []):
+                for point in obj_data.get("points", []):
+                    self.sam_points.append((point["x"], point["y"]))
+                    self.contours_list.append((point["x"], point["y"], point["contour"]))
 
         self.update_visible_boxes(self.boxes_lines)
         self.update()
 
-    def update_visible_boxes(self, boxes_labels):
-        self.boxes_lines = boxes_labels
+    def update_visible_boxes(self, labels):
+        self.boxes_lines = labels
 
         while self.scroll_boxes_layout.count():
             item = self.scroll_boxes_layout.takeAt(0)
@@ -1241,8 +1407,8 @@ class ImageLabellingControls(QWidget):
         self.scroll_boxes_layout.setColumnStretch(1, 1)
         self.scroll_boxes_layout.setHorizontalSpacing(8)
         self.scroll_boxes_layout.setVerticalSpacing(8)
-
-        for idx, box in enumerate(boxes_labels):
+        
+        for idx, box in enumerate(labels):
             parts = box.split()
             if len(parts) < 5:
                 continue
@@ -1448,9 +1614,7 @@ class ImageLabellingControls(QWidget):
 
 
 class ImageViewer(QWidget):
-
     def __init__(self, parent=None):
-
         super().__init__(parent)
 
         self._scale_factor = 1.0
@@ -1458,66 +1622,23 @@ class ImageViewer(QWidget):
         self._image = None
 
         self._image_label = QLabel()
-
-        self._image_label.setBackgroundRole(
-            QPalette.ColorRole.Base
-        )
-
-        self._image_label.setSizePolicy(
-            QSizePolicy.Policy.Ignored,
-            QSizePolicy.Policy.Ignored
-        )
-
-        self._image_label.setScaledContents(
-            True
-        )
-
-        self._image_label.setAlignment(
-            Qt.AlignmentFlag.AlignCenter
-        )
-
-        self._image_label.setMouseTracking(
-            True
-        )
+        self._image_label.setBackgroundRole(QPalette.ColorRole.Base)
+        self._image_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        self._image_label.setScaledContents(True)
+        self._image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._image_label.setMouseTracking(True)
 
         self._scroll_area = QScrollArea()
-
-        self._scroll_area.setBackgroundRole(
-            QPalette.ColorRole.Dark
-        )
-
-        self._scroll_area.setWidget(
-            self._image_label
-        )
-
-        self._scroll_area.setWidgetResizable(
-            False
-        )
-
-        self._scroll_area.setAlignment(
-            Qt.AlignmentFlag.AlignCenter
-        )
-
-        self._scroll_area.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAsNeeded
-        )
-
-        self._scroll_area.setVerticalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAsNeeded
-        )
+        self._scroll_area.setBackgroundRole(QPalette.ColorRole.Dark)
+        self._scroll_area.setWidget(self._image_label)
+        self._scroll_area.setWidgetResizable(False)
+        self._scroll_area.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
         layout = QVBoxLayout(self)
-
-        layout.setContentsMargins(
-            0,
-            0,
-            0,
-            0
-        )
-
-        layout.addWidget(
-            self._scroll_area
-        )
+        layout.setContentsMargins(0,0,0,0)
+        layout.addWidget(self._scroll_area)
 
         self._panning = False
 
@@ -1537,427 +1658,180 @@ class ImageViewer(QWidget):
         return self._scroll_area
 
     def image(self):
-        """
-        Return the currently loaded QImage.
-
-        This fixes the previous:
-            AttributeError:
-            'ImageViewer' object has no attribute 'image'
-        """
-
         return self._image
 
     def display_rect(self):
-
         return self._image_label.geometry()
 
-    def load_file(
-        self,
-        fileName
-    ):
-
-        reader = QImageReader(
-            str(fileName)
-        )
-
-        reader.setAutoTransform(
-            True
-        )
+    def load_file(self, fileName):
+        reader = QImageReader(str(fileName))
+        reader.setAutoTransform(True)
 
         new_image = reader.read()
-
-        native_filename = (
-            QDir.toNativeSeparators(
-                str(fileName)
-            )
-        )
+        native_filename = QDir.toNativeSeparators(str(fileName))
 
         if new_image.isNull():
-
             error = reader.errorString()
-
             QMessageBox.information(
                 self,
                 QGuiApplication.applicationDisplayName(),
                 f"Cannot load {native_filename}: {error}"
             )
-
             return False
 
-        self._set_image(
-            new_image
-        )
-
+        self._set_image(new_image)
         return True
 
-    def _set_image(
-        self,
-        new_image
-    ):
-
+    def _set_image(self, new_image):
         self._image = new_image
-
         if self._image.colorSpace().isValid():
+            color_space = QColorSpace(QColorSpace.NamedColorSpace.SRgb)
+            self._image.convertToColorSpace(color_space)
 
-            color_space = QColorSpace(
-                QColorSpace.NamedColorSpace.SRgb
-            )
-
-            self._image.convertToColorSpace(
-                color_space
-            )
-
-        pixmap = QPixmap.fromImage(
-            self._image
-        )
-
-        self._image_label.setPixmap(
-            pixmap
-        )
-
+        pixmap = QPixmap.fromImage(self._image)
+        self._image_label.setPixmap(pixmap)
         self._scale_factor = 1.0
-
-        self._image_label.setFixedSize(
-            pixmap.size()
-        )
+        self._image_label.setFixedSize(pixmap.size())
 
         self._update_overlay_geometry()
-
         self._update_actions()
 
     def _update_overlay_geometry(self):
-
-        overlay = self._image_label.findChild(
-            QWidget,
-            "image_annotation_overlay"
-        )
-
+        overlay = self._image_label.findChild(QWidget, "image_annotation_overlay")
         if overlay is None:
             return
-
-        overlay.setGeometry(
-            0,
-            0,
-            self._image_label.width(),
-            self._image_label.height()
-        )
-
+        overlay.setGeometry(0, 0, self._image_label.width(), self._image_label.height())
         overlay.raise_()
-
         overlay.update()
 
     @Slot()
     def zoom_in(self):
-
-        self._scale_image(
-            1.25
-        )
+        self._scale_image(1.25)
 
     @Slot()
     def zoom_out(self):
-
-        self._scale_image(
-            0.8
-        )
+        self._scale_image(0.8)
 
     _zoom_in = zoom_in
     _zoom_out = zoom_out
 
     @Slot()
     def _normal_size(self):
-
         if self._image is None:
             return
 
         self._scale_factor = 1.0
 
-        pixmap = QPixmap.fromImage(
-            self._image
-        )
-
-        self._image_label.setFixedSize(
-            pixmap.size()
-        )
+        pixmap = QPixmap.fromImage(self._image)
+        self._image_label.setFixedSize(pixmap.size())
 
         self._update_overlay_geometry()
-
         self._update_actions()
 
     @Slot()
     def _fit_to_window(self):
-
         if self._image is None:
             return
 
-        fit_to_window = (
-            self._fit_to_window_act.isChecked()
-        )
-
+        fit_to_window = self._fit_to_window_act.isChecked()
         if fit_to_window:
-
-            self._scroll_area.setWidgetResizable(
-                True
-            )
-
-            self._image_label.setSizePolicy(
-                QSizePolicy.Policy.Ignored,
-                QSizePolicy.Policy.Ignored
-            )
+            self._scroll_area.setWidgetResizable(True)
+            self._image_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
 
         else:
-
-            self._scroll_area.setWidgetResizable(
-                False
-            )
-
-            self._image_label.setSizePolicy(
-                QSizePolicy.Policy.Ignored,
-                QSizePolicy.Policy.Ignored
-            )
-
+            self._scroll_area.setWidgetResizable(False)
+            self._image_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
             self._normal_size()
 
         self._update_actions()
 
-    def _scale_image(
-        self,
-        factor
-    ):
-
+    def _scale_image(self, factor):
         if self._image is None:
             return
 
-        old_scale = (
-            self._scale_factor
-        )
-
+        old_scale = self._scale_factor
         self._scale_factor *= factor
-
         self._scale_factor = max(
             0.333,
-            min(
-                3.0,
-                self._scale_factor
-            )
+            min(3.0, self._scale_factor)
         )
 
-        actual_factor = (
-            self._scale_factor /
-            old_scale
-        )
+        actual_factor = self._scale_factor / old_scale
 
-        new_width = int(
-            self._image.width() *
-            self._scale_factor
-        )
+        new_width = int(self._image.width() * self._scale_factor)
+        new_height = int(self._image.height() * self._scale_factor)
 
-        new_height = int(
-            self._image.height() *
-            self._scale_factor
-        )
-
-        hbar = (
-            self._scroll_area.horizontalScrollBar()
-        )
-
-        vbar = (
-            self._scroll_area.verticalScrollBar()
-        )
+        hbar = self._scroll_area.horizontalScrollBar()
+        vbar = self._scroll_area.verticalScrollBar()
 
         old_h = hbar.value()
         old_v = vbar.value()
 
-        viewport_center_x = (
-            self._scroll_area.viewport().width()
-            / 2
-        )
+        viewport_center_x = self._scroll_area.viewport().width() / 2
 
-        viewport_center_y = (
-            self._scroll_area.viewport().height()
-            / 2
-        )
+        viewport_center_y = self._scroll_area.viewport().height() / 2
 
-        image_x = (
-            old_h +
-            viewport_center_x
-        )
+        image_x = old_h + viewport_center_x
+        image_y = old_v + viewport_center_y
 
-        image_y = (
-            old_v +
-            viewport_center_y
-        )
-
-        self._image_label.setFixedSize(
-            new_width,
-            new_height
-        )
-
+        self._image_label.setFixedSize(new_width, new_height)
         self._update_overlay_geometry()
 
-        new_h = int(
-            image_x *
-            actual_factor -
-            viewport_center_x
-        )
+        new_h = int(image_x * actual_factor - viewport_center_x)
+        new_v = int(image_y * actual_factor - viewport_center_y)
 
-        new_v = int(
-            image_y *
-            actual_factor -
-            viewport_center_y
-        )
-
-        hbar.setValue(
-            new_h
-        )
-
-        vbar.setValue(
-            new_v
-        )
+        hbar.setValue(new_h)
+        vbar.setValue(new_v)
 
         self._update_actions()
 
-    def _start_pan(
-        self,
-        position
-    ):
-
+    def _start_pan(self, position):
         self._panning = True
-
         self._pan_start = position
 
-        self._horizontal_start = (
-            self._scroll_area
-            .horizontalScrollBar()
-            .value()
-        )
+        self._horizontal_start = self._scroll_area.horizontalScrollBar().value()
+        self._vertical_start = self._scroll_area.verticalScrollBar().value()
 
-        self._vertical_start = (
-            self._scroll_area
-            .verticalScrollBar()
-            .value()
-        )
+        self._image_label.setCursor(Qt.CursorShape.ClosedHandCursor)
 
-        self._image_label.setCursor(
-            Qt.CursorShape.ClosedHandCursor
-        )
-
-    def _update_pan(
-        self,
-        position
-    ):
-
+    def _update_pan(self, position):
         if not self._panning:
             return
 
-        delta = (
-            position -
-            self._pan_start
-        )
-
-        self._scroll_area.horizontalScrollBar().setValue(
-            self._horizontal_start -
-            delta.x()
-        )
-
-        self._scroll_area.verticalScrollBar().setValue(
-            self._vertical_start -
-            delta.y()
-        )
+        delta = position - self._pan_start
+        self._scroll_area.horizontalScrollBar().setValue(self._horizontal_start - delta.x())
+        self._scroll_area.verticalScrollBar().setValue(self._vertical_start - delta.y())
 
     def _end_pan(self):
-
         self._panning = False
-
-        self._image_label.setCursor(
-            Qt.CursorShape.ArrowCursor
-        )
+        self._image_label.setCursor(Qt.CursorShape.ArrowCursor)
 
     def eventFilter(self, watched, event):
         return super().eventFilter(watched, event)
 
     def _create_actions(self):
-        self._save_as_act = QAction(
-            "&Save As...",
-            self
-        )
-
-        self._print_act = QAction(
-            "&Print...",
-            self
-        )
-
-        self._copy_act = QAction(
-            "&Copy",
-            self
-        )
-
-        self._paste_act = QAction(
-            "&Paste",
-            self
-        )
-
-        self._zoom_in_act = QAction(
-            "Zoom &In (25%)",
-            self
-        )
-
-        self._zoom_out_act = QAction(
-            "Zoom &Out (25%)",
-            self
-        )
-
-        self._normal_size_act = QAction(
-            "&Normal Size",
-            self
-        )
-
-        self._fit_to_window_act = QAction(
-            "&Fit to Window",
-            self
-        )
-
-        self._fit_to_window_act.setCheckable(
-            True
-        )
-
+        self._save_as_act = QAction("&Save As...", self)
+        self._print_act = QAction("&Print...", self)
+        self._copy_act = QAction("&Copy", self)
+        self._paste_act = QAction("&Paste", self)
+        self._zoom_in_act = QAction("Zoom &In (25%)", self)
+        self._zoom_out_act = QAction("Zoom &Out (25%)", self)
+        self._normal_size_act = QAction("&Normal Size", self)
+        self._fit_to_window_act = QAction("&Fit to Window", self)
+        self._fit_to_window_act.setCheckable(True)
         self._update_actions()
 
     def _update_actions(self):
+        has_image = (self._image is not None)
+        self._save_as_act.setEnabled(has_image)
+        self._copy_act.setEnabled(has_image)
+        self._print_act.setEnabled(has_image)
 
-        has_image = (
-            self._image is not None
-        )
+        enable_zoom = (has_image and not self._fit_to_window_act.isChecked())
 
-        self._save_as_act.setEnabled(
-            has_image
-        )
-
-        self._copy_act.setEnabled(
-            has_image
-        )
-
-        self._print_act.setEnabled(
-            has_image
-        )
-
-        enable_zoom = (
-            has_image
-            and not self._fit_to_window_act.isChecked()
-        )
-
-        self._zoom_in_act.setEnabled(
-            enable_zoom
-            and self._scale_factor < 3.0
-        )
-
-        self._zoom_out_act.setEnabled(
-            enable_zoom
-            and self._scale_factor > 0.333
-        )
-
-        self._normal_size_act.setEnabled(
-            enable_zoom
-        )
+        self._zoom_in_act.setEnabled(enable_zoom and self._scale_factor < 3.0)
+        self._zoom_out_act.setEnabled(enable_zoom and self._scale_factor > 0.333)
+        self._normal_size_act.setEnabled(enable_zoom)
 
     def _save_file(self, fileName):
         if self._image is None:
