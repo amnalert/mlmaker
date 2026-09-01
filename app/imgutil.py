@@ -153,14 +153,13 @@ class ImageContainer(QWidget):
             if self.img_labelling_controls.is_previewing:
                 self.img_labelling_controls.contours_list.pop()
                 self.img_labelling_controls.is_previewing = False
-            self.img_labelling_controls.reset_box()
-            self.img_labelling_controls.update()
+                self.img_labelling_controls.reset_box()
+                self.img_labelling_controls.update()
 
         elif event.key() == Qt.Key.Key_Right:
             if self.img_labelling_controls.is_previewing:
-                self.status_label.setText("Info: Cannot swap image until current label is confirmed(Enter/Return) or removed(Esc).")
-            if self.img_labelling_controls.contours_list:
-                self.img_labelling_controls.write_sam_data() # autosave instead of destroy
+                self.img_labelling_controls.status_label.setText("Info: Cannot swap image until current label is confirmed(Enter/Return) or removed(Esc).")
+                return
 
             self.img_labelling_controls.reset_box()
             try:
@@ -276,9 +275,9 @@ class ImageLabellingControls(QWidget):
         self.show_all_boxes_btn.clicked.connect(self._draw_all_boxes)
 
         # Change annotation type: YOLO or SAM
-        self.annotation_type = "YOLO"
+        self.annotation_type = "SAM"
         self.annotation_type_label = QLabel(f"Label Type: {self.annotation_type}")
-        self.change_annotation_type = QPushButton("Switch to SAM Labelling")
+        self.change_annotation_type = QPushButton("Switch to YOLO Labelling")
         self.change_annotation_type.clicked.connect(self.switch_annot_type)
 
         # Actions
@@ -309,23 +308,32 @@ class ImageLabellingControls(QWidget):
             return
         
         self.change_annotation_type.setText(f"Switch to {self.annotation_type} Labelling")
+        label_folder = Path(self.project) / "image_labels"
 
         if self.annotation_type == "YOLO":
             self.annotation_type = "SAM"
             self.annotation_type_label.setText(f"Label Type: {self.annotation_type}")
-            self.image_label_file = Path(self.project) / "image_labels" / "sam_labels.json"
+            self.image_label_file = label_folder / "sam_labels.json"
             self.image_label_file.touch()
             self.box_label_1.hide()
             self.box_label_2.hide()
 
             self.load_saved_boxes(self.image_label_file, self.parents.current_image)
 
-
         elif self.annotation_type == "SAM":
             self.annotation_type = "YOLO"
             self.annotation_type_label.setText(f"Label Type: {self.annotation_type}")
             self.box_label_1.show()
             self.box_label_2.show()
+
+            if Path(self.current_image).parent.name != "image_uploads":
+                label_folder /= Path(self.current_image).parent.name
+
+            self.image_label_file = label_folder / f"{Path(self.current_image).stem}.txt"
+            self.image_label_file.parent.mkdir(parents=True, exist_ok=True)
+            self.image_label_file.touch()
+
+            self.load_saved_boxes(self.image_label_file, self.parents.current_image)
 
         self.update()
         self.reset_box()
@@ -509,7 +517,7 @@ class ImageLabellingControls(QWidget):
         if self.contours_list and len(self.sam_points) > 1:
             self.contours_list.pop()
 
-        self.contours_list.append([points, contours])
+        self.contours_list.append([points, contours, -1])
         self.update()
         self.repaint()
 
@@ -855,13 +863,13 @@ class ImageLabellingControls(QWidget):
                     if normalized_points and normalized_contours:
                         self.contours_list.append([
                                 normalized_points,
-                                normalized_contours
+                                normalized_contours,
+                                obj_data.get("id", -1)
                         ])
 
                         print(f"  Loaded object: {len(normalized_points)} SAM points, {len(normalized_contours)} contours")
 
-            # sam_points should represent the object currently
-            # being edited, NOT all saved objects.
+            # sam_points should represent the object currently being edited, NOT all saved objects.
             self.sam_points.clear()
 
             self.update_visible_boxes(self.contours_list)
@@ -965,14 +973,8 @@ class ImageLabellingControls(QWidget):
 
         elif self.annotation_type == "SAM":
             for idx, label in enumerate(labels):
-                if (not isinstance(label, (list, tuple)) or len(label) != 2):
-                    continue
-
                 points = label[0]
                 contours = label[1]
-
-                if not isinstance(points, list):
-                    continue
 
                 row = idx // 2
                 col = idx % 2
@@ -1019,28 +1021,27 @@ class ImageLabellingControls(QWidget):
                 boxinfo_layout.addWidget(sam_info, alignment=Qt.AlignmentFlag.AlignTop)
                 boxinfo_layout.addLayout(buttons_layout)
 
-                self.scroll_boxes_layout.addWidget(
-                    box_container, row, col, 1, 1, (Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-                )
+                self.scroll_boxes_layout.addWidget(box_container, row, col, 1, 1, (Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft))
 
                 box_container.setProperty("sam_info", label)
                 box_container.installEventFilter(self)
 
-    def delete_sam_label(self, label, image):
+    def delete_sam_label(self, label, image): # label = [[points], contours, id]
         if self.annotation_type == "SAM":
             with open(self.image_label_file, "r") as f:
                 data = json.load(f)
 
             # keeps every image dictionary except the one matching img_path
             img_path = Path(image).resolve().relative_to(self.parents.project.resolve()).as_posix()
-            data["images"] = [img for img in data["images"] if img["image"] != img_path]
+            image_data = next((img for img in data["images"] if img["image"] == img_path), None)
+            if image_data is not None:
+                image_data["objects"] = [ obj for obj in image_data["objects"] if obj["id"] != label[2]]
         
             with open(self.image_label_file, "w") as f:
                 json.dump(data, f, indent=4, default=lambda obj: obj.tolist())
 
 
     def change_default_class(self):
-
         choice, ok = QInputDialog.getItem(
             self,
             "Choose default class",
@@ -1049,44 +1050,24 @@ class ImageLabellingControls(QWidget):
         )
 
         if ok and choice:
-
             self.default_class = choice
 
-    def change_species_label(
-        self,
-        label,
-        new_class
-    ):
-
+    def change_species_label(self, label, new_class):
         if label not in self.boxes_lines:
             return
 
         parts = label.split()
-
         parts[0] = new_class
-
         new_label = " ".join(parts)
-
-        index = self.boxes_lines.index(
-            label
-        )
+        index = self.boxes_lines.index(label)
 
         self.boxes_lines[index] = new_label
 
-        with open(
-            self.image_label_file,
-            "w"
-        ) as f:
-
+        with open(self.image_label_file, "w") as f:
             for box in self.boxes_lines:
+                f.write(f"{box}\n")
 
-                f.write(
-                    f"{box}\n"
-                )
-
-        self.load_saved_boxes(
-            self.image_label_file, self.parents.current_image
-        )
+        self.load_saved_boxes(self.image_label_file, self.parents.current_image)
 
     def delete_label(self, label):
         if self.annotation_type == "YOLO":
@@ -1100,7 +1081,6 @@ class ImageLabellingControls(QWidget):
             self.load_saved_boxes(self.image_label_file, self.parents.current_image)
 
     def eventFilter(self, watched, event):
-
         if watched == self.parent_label:
             if event.type() in (
                 QEvent.Type.Resize,
