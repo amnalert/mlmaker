@@ -179,15 +179,6 @@ class SAMWorker(QObject):
             square_static[pad_y:pad_y+h, pad_x:pad_x+w][cropped_mask] = cropped_fg[cropped_mask]
 
             output = cv2.cvtColor(square_static, cv2.COLOR_RGB2BGR)
-            outpath = Path(self.outdir) / source_image.stem
-            outpath.mkdir(parents=True, exist_ok=True)
-
-            counter = 1
-            outpath = Path(self.outdir) / source_image.stem / f"{source_image.stem}_mask_1.png"
-            while outpath.exists():
-                counter += 1
-                outpath = Path(self.outdir) / source_image.stem / f"{source_image.stem}_mask_{counter}.png"
-
             self.converted.emit(output)
 
         else:

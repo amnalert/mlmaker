@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import QApplication, QWidget, QGridLayout, QPushButton, QLabel, QHBoxLayout, QVBoxLayout, QSizePolicy, QMessageBox, QScrollArea, QComboBox, QInputDialog, QDialog
 from PySide6.QtCore import Qt, QPoint, QEvent, QRectF, QDir, Slot, QPointF
-from PySide6.QtGui import QKeySequence, QBrush, QPainter, QPolygonF, QPixmap, QFont, QKeyEvent, QPen, QColor, QPalette, QImageReader, QGuiApplication, QColorSpace, QAction, QImageWriter, QPainterPath
+from PySide6.QtGui import QKeySequence, QBrush, QPainter, QPolygon, QPixmap, QFont, QKeyEvent, QPen, QColor, QPalette, QImageReader, QGuiApplication, QColorSpace, QAction, QImageWriter, QPainterPath
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from pathlib import Path
 import shutil, json, cv2
@@ -517,7 +517,8 @@ class ImageLabellingControls(QWidget):
         if self.contours_list and len(self.sam_points) > 1:
             self.contours_list.pop()
 
-        self.contours_list.append([points, contours, -1])
+        def_class = self.default_class if self.default_class != "none" else self.species[0] if self.species else "none"
+        self.contours_list.append([points, contours, -1, def_class])
         self.update()
         self.repaint()
 
@@ -590,46 +591,58 @@ class ImageLabellingControls(QWidget):
                 pen.setCapStyle(Qt.PenCapStyle.RoundCap)
                 painter.setPen(pen)
                 painter.setBrush(Qt.BrushStyle.NoBrush)
-                for point in self.sam_points:
-                    if not isinstance(point, (list, tuple)) or len(point) < 2:
-                        continue
-                    px = point[0]
-                    py = point[1]
-                    wx, wy = self.image_to_widget_coords(px, py)
-                    painter.drawPoint(int(wx), int(wy))
-                if self.contours_list:
+
+                if self.contours_list and self.is_previewing:
                     pen = QPen(self.colors[self.color_index], 2, Qt.PenStyle.SolidLine)
                     brush = QBrush(QColor(0, 255, 0, 80))
                     painter.setPen(pen)
                     painter.setBrush(brush)
-                    objects_to_draw = self.contours_list if self.showing_all_boxes else [self.contours_list[-1]]
-                    for contours_info in objects_to_draw:
-                        points = contours_info[0]
-                        contours = contours_info[1]
-                        if self.showing_all_boxes:
-                            for point in points:
-                                wx, wy = self.image_to_widget_coords(point[0], point[1])
-                                painter.drawPoint(int(wx), int(wy))
-                        if not isinstance(contours, (list, tuple)):
-                            continue
-                        for contour in contours:
-                            contour_pts = []
-                            for pt in contour:
-                                wx, wy = self.image_to_widget_coords(int(pt[0]), int(pt[1]))
-                                contour_pts.append(QPointF(wx, wy))
-                            if len(contour_pts) < 3:
-                                continue
-                            painter.drawPolygon(QPolygonF(contour_pts))
 
-            if self.hovered_box_label is not None and self.annotation_type == "YOLO":
-                self._draw_box_from_label(painter, self.hovered_box_label, QColor("#ffd93d"), 3)
-            if self.showing_all_boxes and self.annotation_type == "YOLO":
-                for box_label in self.boxes_lines:
-                    if not isinstance(box_label, str):
-                        continue
-                    self._draw_box_from_label(painter, box_label, QColor("#00ff00"), 2)
+            if self.hovered_box_label is not None:
+                if self.annotation_type == "YOLO":
+                    self._draw_box_from_label(painter, self.hovered_box_label, QColor("#ffd93d"), 3)
+
+                elif self.annotation_type == "SAM":
+                    self._draw_sam_from_label(painter, self.hovered_box_label, QColor("#ffd93d"), 3)
+
+            if self.showing_all_boxes:
+                if self.annotation_type == "YOLO":
+                    for box_label in self.boxes_lines:
+                        self._draw_box_from_label(painter, box_label, QColor("#00ff00"), 2)
+
+                elif self.annotation_type == "SAM": 
+                    for sam_label in self.contours_list:
+                        self._draw_sam_from_label(painter, sam_label, QColor("#00ff00"), 2)
+
+                    for point in self.sam_points:
+                        px = point[0]
+                        py = point[1]
+                        wx, wy = self.image_to_widget_coords(px, py)
+                        painter.drawPoint(int(wx), int(wy))
+
         finally:
             painter.end()
+
+    def _draw_sam_from_label(self, painter, label, color, width=2):
+        points = label[0]
+        contours = label[1]
+        obj_class = label[3]
+
+        painter.setPen(QPen(color, width, Qt.PenStyle.SolidLine))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
+        if not self.showing_all_boxes:
+            for point in points:
+                wx, wy = self.image_to_widget_coords(point[0], point[1])
+                painter.drawPoint(int(wx), int(wy))
+
+        for contour in contours:
+            contour_pts = []
+            for pt in contour:
+                wx, wy = self.image_to_widget_coords(int(pt[0]), int(pt[1]))
+                contour_pts.append(QPoint(int(wx), int(wy)))
+
+            painter.drawPolygon(QPolygon(contour_pts))
 
     def _draw_box_from_label(self, painter, label, color, width=2):
         try:
@@ -755,15 +768,16 @@ class ImageLabellingControls(QWidget):
                 data["images"].append(image_data)
 
             if self.sam_points and self.contours_list:
-                contours_info = self.contours_list[-1]
+                contours_info = self.contours_list[-1] # contours_info is [[points], [contours], id, class]
                 contours = contours_info[1]
+                obj_class = contours_info[3]
 
                 obj_data = {
                     "id": len(image_data["objects"]),
                     "data": [{
                         "points": self.sam_points,
-                        "label": self.default_class,
-                        "contour": contours
+                        "contour": contours,
+                        "class": obj_class
                     }]
                 }
 
@@ -772,9 +786,16 @@ class ImageLabellingControls(QWidget):
                 with open(self.image_label_file, "w") as f:
                     json.dump(data, f, indent=4, default=lambda obj: obj.tolist())
 
-                if self.current_object_converted is not None and hasattr(self.current_object_converted, "shape"):
-                    converted_path = Path(self.project) / "sam_isolated_objects" / (Path(self.parents.current_image).name)
-                    cv2.imwrite(str(converted_path), self.current_object_converted)
+                if self.current_object_converted is not None:
+                    converted_path = Path(self.project) / "sam_isolated_objects" / (Path(self.parents.current_image).stem)
+                    converted_path.mkdir(parents=True, exist_ok=True)
+                    target = f"{Path(self.parents.current_image).stem}_mask_1{Path(self.parents.current_image).suffix}"
+                    counter = 1
+                    while Path(converted_path / target).exists():
+                        counter += 1
+                        target = f"{Path(self.parents.current_image).stem}_mask_{counter}{Path(self.parents.current_image).suffix}"
+
+                    cv2.imwrite(str(converted_path / target), self.current_object_converted)
 
         self.reset_box()
         self.load_saved_boxes(self.image_label_file, self.parents.current_image)
@@ -864,7 +885,8 @@ class ImageLabellingControls(QWidget):
                         self.contours_list.append([
                                 normalized_points,
                                 normalized_contours,
-                                obj_data.get("id", -1)
+                                obj_data.get("id", -1),
+                                obj_data["data"][0].get("class", self.default_class)
                         ])
 
                         print(f"  Loaded object: {len(normalized_points)} SAM points, {len(normalized_contours)} contours")
@@ -877,7 +899,8 @@ class ImageLabellingControls(QWidget):
         self.update()
 
     def update_visible_boxes(self, labels):
-        self.boxes_lines = labels
+        if self.annotation_type == "YOLO":
+            self.boxes_lines = labels
 
         while self.scroll_boxes_layout.count():
             item = self.scroll_boxes_layout.takeAt(0)
@@ -975,6 +998,8 @@ class ImageLabellingControls(QWidget):
             for idx, label in enumerate(labels):
                 points = label[0]
                 contours = label[1]
+                obj_id = label[2]
+                obj_class = label[3]
 
                 row = idx // 2
                 col = idx % 2
@@ -1003,8 +1028,14 @@ class ImageLabellingControls(QWidget):
                 label_info_text = (
                     f"Object {idx + 1}\n"
                     f"Points: {len(points)}\n"
-                    f"Contours: {len(contours)}"
+                    f"Class: {obj_class}"
                 )
+
+                species_list_dropdown = QComboBox()
+                species_list_dropdown.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+                species_list_dropdown.addItems(self.species)
+                species_list_dropdown.setCurrentText(obj_class)
+                species_list_dropdown.currentTextChanged.connect(lambda new_class: self.change_species_label(label, new_class))
 
                 sam_info = QLabel(label_info_text)
 
@@ -1017,16 +1048,16 @@ class ImageLabellingControls(QWidget):
                 delete_lbl_btn.clicked.connect(lambda checked=False, label=label: self.delete_sam_label(label, self.current_image))
 
                 buttons_layout.addWidget(delete_lbl_btn)
-                delete_lbl_btn.raise_()
+                buttons_layout.addWidget(species_list_dropdown)
                 boxinfo_layout.addWidget(sam_info, alignment=Qt.AlignmentFlag.AlignTop)
                 boxinfo_layout.addLayout(buttons_layout)
 
                 self.scroll_boxes_layout.addWidget(box_container, row, col, 1, 1, (Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft))
 
-                box_container.setProperty("sam_info", label)
+                box_container.setProperty("sam_label", label)
                 box_container.installEventFilter(self)
 
-    def delete_sam_label(self, label, image): # label = [[points], contours, id]
+    def delete_sam_label(self, label, image): # label = [[points], contours, id, class]
         if self.annotation_type == "SAM":
             with open(self.image_label_file, "r") as f:
                 data = json.load(f)
@@ -1035,11 +1066,18 @@ class ImageLabellingControls(QWidget):
             img_path = Path(image).resolve().relative_to(self.parents.project.resolve()).as_posix()
             image_data = next((img for img in data["images"] if img["image"] == img_path), None)
             if image_data is not None:
-                image_data["objects"] = [ obj for obj in image_data["objects"] if obj["id"] != label[2]]
+                image_data["objects"] = [ obj for obj in image_data["objects"] if obj["id"] != label[2] ]
         
             with open(self.image_label_file, "w") as f:
                 json.dump(data, f, indent=4, default=lambda obj: obj.tolist())
 
+            # check saved masks and remove, mask number should be same as label[2] + 1
+            this_img_masks = Path(self.project) / "sam_isolated_objects" / self.parents.current_image.stem / f"{self.parents.current_image.stem}_mask_{label[2] + 1}{self.parents.current_image.suffix}"
+            if this_img_masks.exists():
+                this_img_masks.unlink()
+
+        self.load_saved_boxes(self.image_label_file, self.parents.current_image)
+        self.update()
 
     def change_default_class(self):
         choice, ok = QInputDialog.getItem(
@@ -1053,20 +1091,45 @@ class ImageLabellingControls(QWidget):
             self.default_class = choice
 
     def change_species_label(self, label, new_class):
-        if label not in self.boxes_lines:
-            return
+        if self.annotation_type == "YOLO":
+            if label not in self.boxes_lines:
+                return
 
-        parts = label.split()
-        parts[0] = new_class
-        new_label = " ".join(parts)
-        index = self.boxes_lines.index(label)
+            parts = label.split()
+            parts[0] = new_class
+            new_label = " ".join(parts)
+            index = self.boxes_lines.index(label)
 
-        self.boxes_lines[index] = new_label
+            self.boxes_lines[index] = new_label
 
-        with open(self.image_label_file, "w") as f:
-            for box in self.boxes_lines:
-                f.write(f"{box}\n")
+            with open(self.image_label_file, "w") as f:
+                for box in self.boxes_lines:
+                    f.write(f"{box}\n")
 
+        elif self.annotation_type == "SAM":
+            points = label[0]
+            contours = label[1]
+            obj_id = label[2]
+            obj_class = label[3]
+
+            with open(self.image_label_file, "r") as f:
+                data = json.load(f)
+                            
+            img_path = str(Path(self.parents.current_image).resolve().relative_to(self.parents.project.resolve()).as_posix())
+            image_data = next((img for img in data["images"] if img["image"] == img_path), None)
+
+            if image_data is None:
+                image_data = {"image": img_path, "objects": []}
+                data["images"].append(image_data)
+
+            for obj_data in image_data["objects"]:
+                if obj_data["id"] == obj_id:
+                    obj_data["data"][0]["class"] = new_class
+                    break
+
+            with open(self.image_label_file, "w") as f:
+                json.dump(data, f, indent=4, default=lambda obj: obj.tolist())
+        
         self.load_saved_boxes(self.image_label_file, self.parents.current_image)
 
     def delete_label(self, label):
@@ -1082,29 +1145,18 @@ class ImageLabellingControls(QWidget):
 
     def eventFilter(self, watched, event):
         if watched == self.parent_label:
-            if event.type() in (
-                QEvent.Type.Resize,
-                QEvent.Type.Move,
-                QEvent.Type.Show,
-                QEvent.Type.Paint
-            ):
-
+            if event.type() in (QEvent.Type.Resize, QEvent.Type.Move, QEvent.Type.Show, QEvent.Type.Paint):
                 self._sync_geometry()
                 self.update()
 
         else:
             if isinstance(watched, QWidget):
-                box_label = watched.property(
-                    "box_label"
-                )
+                box_label = watched.property("box_label")
+                sam_label = watched.property("sam_label")
 
                 if box_label is not None:
-
                     if event.type() == QEvent.Type.Enter:
-
-                        self.hovered_box_label = (
-                            box_label
-                        )
+                        self.hovered_box_label = box_label
 
                         watched.setStyleSheet(
                             "QWidget {"
@@ -1115,15 +1167,8 @@ class ImageLabellingControls(QWidget):
                             "}"
                         )
 
-                        self.update()
-
                     elif event.type() == QEvent.Type.Leave:
-
-                        if (
-                            self.hovered_box_label
-                            == box_label
-                        ):
-
+                        if (self.hovered_box_label == box_label):
                             self.hovered_box_label = None
 
                             watched.setStyleSheet(
@@ -1135,12 +1180,35 @@ class ImageLabellingControls(QWidget):
                                 "}"
                             )
 
-                            self.update()
+                if sam_label is not None:
+                    if event.type() == QEvent.Type.Enter:
+                        self.hovered_box_label = sam_label
 
-        return super().eventFilter(
-            watched,
-            event
-        )
+                        watched.setStyleSheet(
+                            "QWidget {"
+                            "  border: 2px solid #ffd93d;"
+                            "  border-radius: 6px;"
+                            "  background-color: rgba(255, 217, 61, 24);"
+                            "  padding: 6px;"
+                            "}"
+                        )
+
+                    elif event.type() == QEvent.Type.Leave:
+                        if (self.hovered_box_label == sam_label):
+                            self.hovered_box_label = None
+
+                            watched.setStyleSheet(
+                                "QWidget {"
+                                "  border: 1px solid #7a7a7a;"
+                                "  border-radius: 6px;"
+                                "  background-color: rgba(255, 255, 255, 12);"
+                                "  padding: 6px;"
+                                "}"
+                            )
+
+                self.update()
+
+        return super().eventFilter(watched, event)
 
 
 class ImageViewer(QWidget):
