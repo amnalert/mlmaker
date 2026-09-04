@@ -3,7 +3,7 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QLineEdit, QPushButton, QLabel,
     QMessageBox, QScrollArea
 )
-from PySide6.QtCore import QSize, Signal, Qt, QTimer, QThread, QObject
+from PySide6.QtCore import Signal, Qt, QThread, QObject
 
 import math
 import uuid

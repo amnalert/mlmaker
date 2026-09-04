@@ -3,7 +3,6 @@ from PySide6.QtCore import QUrl, Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QWidget, QPushButton, QHBoxLayout, QLabel, QVBoxLayout, QSlider
 import random
-import time
 from pathlib import Path
 
 SONG_EXTS = {".mp3", ".wav", ".flac", ".m4a"}

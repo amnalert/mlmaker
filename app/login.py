@@ -1,7 +1,6 @@
 import keyring
-import argparse
-from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QLineEdit, QPushButton, QLabel, QMessageBox
-from PySide6.QtCore import QSize, Signal, Qt
+from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout, QLineEdit, QPushButton, QLabel, QMessageBox
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QCursor
 from datetime import datetime
 from pathlib import Path
@@ -17,6 +16,8 @@ class LoginWindow(QWidget):
         # Main window
         self.setFixedSize(QSize(350, 200))
         layout = QVBoxLayout(self)
+        layout.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
+
         cscreen = QApplication.screenAt(QCursor.pos())
         if not cscreen:
             cscreen = QApplication.primaryScreen()

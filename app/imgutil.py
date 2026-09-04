@@ -1,6 +1,6 @@
-from PySide6.QtWidgets import QApplication, QWidget, QGridLayout, QPushButton, QLabel, QHBoxLayout, QVBoxLayout, QSizePolicy, QMessageBox, QScrollArea, QComboBox, QInputDialog, QDialog
-from PySide6.QtCore import Qt, QPoint, QEvent, QRectF, QDir, Slot, QPointF
-from PySide6.QtGui import QKeySequence, QBrush, QPainter, QPolygon, QPixmap, QFont, QKeyEvent, QPen, QColor, QPalette, QImageReader, QGuiApplication, QColorSpace, QAction, QImageWriter, QPainterPath
+from PySide6.QtWidgets import QApplication, QWidget, QGridLayout, QPushButton, QLabel, QHBoxLayout, QVBoxLayout, QSizePolicy, QMessageBox, QScrollArea, QComboBox, QInputDialog, QDialog, QProgressBar
+from PySide6.QtCore import Qt, QPoint, QEvent, QRectF, QDir, Slot, QTimer, QEventLoop
+from PySide6.QtGui import QKeySequence, QBrush, QPainter, QPolygon, QPixmap, QFont, QKeyEvent, QPen, QColor, QPalette, QImageReader, QGuiApplication, QColorSpace, QAction, QImageWriter
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from pathlib import Path
 import shutil, json, cv2
@@ -112,6 +112,39 @@ class ImageContainer(QWidget):
             right_layout.addWidget(self.annotation_type_label, alignment=(Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight))
             right_layout.addWidget(self.change_annotation_type, alignment=(Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight))
 
+            self.prediction_overlay = QWidget(self)
+            self.prediction_overlay.setStyleSheet(
+                "QWidget { background-color: rgba(20, 20, 20, 190); }"
+                "QLabel { color: white; font-size: 14px; }"
+                "QProgressBar { border: 1px solid #888; border-radius: 3px; height: 8px; }"
+                "QProgressBar::chunk { background-color: #4da3ff; }"
+            )
+            overlay_layout = QVBoxLayout(self.prediction_overlay)
+            overlay_layout.setContentsMargins(24, 16, 24, 16)
+            overlay_layout.setSpacing(8)
+            overlay_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            overlay_layout.addWidget(QLabel("Predicting..."), alignment=Qt.AlignmentFlag.AlignCenter)
+            progress = QProgressBar()
+            progress.setRange(0, 0)
+            progress.setFixedWidth(180)
+            overlay_layout.addWidget(progress)
+            self.prediction_overlay.hide()
+
+    def set_prediction_busy(self, busy):
+        if not self.annotating:
+            return
+        if busy:
+            self.prediction_overlay.setGeometry(self.rect())
+            self.prediction_overlay.raise_()
+            self.prediction_overlay.show()
+        else:
+            self.prediction_overlay.hide()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self.annotating and hasattr(self, "prediction_overlay"):
+            self.prediction_overlay.setGeometry(self.rect())
+
     def view_image(self, img, prj, img_list):
         self.current_image = Path(img)
         self.img_labelling_controls.current_image = self.current_image
@@ -183,6 +216,12 @@ class ImageContainer(QWidget):
                     ]
                 )
 
+        if event.key() == Qt.Key.Key_Space:
+            self.img_labelling_controls.color_index = (self.img_labelling_controls.color_index + 1) % len(self.img_labelling_controls.colors)
+            self.img_labelling_controls.update()
+            event.accept()
+            return
+        
         elif event.key() == Qt.Key.Key_Return:
             # save previewed sam thingy
             if self.img_labelling_controls.annotation_type == "SAM" and self.img_labelling_controls.is_previewing:
@@ -236,6 +275,7 @@ class ImageLabellingControls(QWidget):
         self.boxes_lines = []
         self.current_box = [ (-1, -1), (-1, -1) ]
         self.sam_points = [] # At least 3 points are required
+        self.sam_point_labels = []
         self.default_class = "none"
         self.hovered_box_label = None
         self.showing_all_boxes = True
@@ -291,8 +331,12 @@ class ImageLabellingControls(QWidget):
 
         self.tmp_boxes = [] # saved undo boxes, can redo while still on the same image
         self.tmp_sam_points = [] # saved undo points, can redo while that label still being drawn
+        self.tmp_sam_point_labels = []
 
         self.sam_predictor = SAMPredict(self)
+        self.sam_predictor.prediction.connect(self.receive_sam_prediction)
+        self.sam_predictor.converted.connect(self.receive_conversion)
+        self.sam_predictor.failed.connect(self.prediction_failed)
         self.is_predicting = False
         self.is_previewing = False
         self.contours_list = []
@@ -453,8 +497,12 @@ class ImageLabellingControls(QWidget):
             event.accept()
             return
 
-        if event.button() == Qt.MouseButton.RightButton:
-            self.color_index = (self.color_index + 1) % len(self.colors)
+        if event.button() == Qt.MouseButton.RightButton and self.annotation_type == "SAM":
+            img_x, img_y = self.widget_to_image_coords(x, y)
+            self.sam_points.append([img_x, img_y])
+            self.sam_point_labels.append(0)
+            self.sam_points_label.setText(f"Points for this object: {len(self.sam_points)}")
+            self.start_sam_prediction(img_x, 0)
             self.update()
             event.accept()
             return
@@ -479,8 +527,9 @@ class ImageLabellingControls(QWidget):
 
             elif self.annotation_type == "SAM":
                 self.sam_points.append([img_x, img_y])
+                self.sam_point_labels.append(1)
                 self.sam_points_label.setText(f"Points for this object: {len(self.sam_points)}")
-                self.start_sam_prediction(img_x, img_y)
+                self.start_sam_prediction(img_x, 1)
                         
         self.update()
         event.accept()
@@ -491,26 +540,30 @@ class ImageLabellingControls(QWidget):
 
         event.accept()
 
-    def start_sam_prediction(self, px, py):
+    def start_sam_prediction(self, px, label):
         if self.is_predicting:
             return
         self.is_predicting = True
+        self.parents.set_prediction_busy(True)
+        QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
         img = self.parents.current_image
 
         if not self.is_previewing:
             # one point
-            self.sam_predictor.prediction.connect(self.receive_sam_prediction)
-            self.sam_predictor.converted.connect(self.receive_conversion)
-            self.sam_predictor.analyze_point(px, py, box=None, image=img, label=1, prj=self.project)
+            point = self.sam_points[-1]
+            QTimer.singleShot(50, lambda: self.sam_predictor.analyze_point(point[0], point[1], box=None, image=img, label=label, prj=self.project))
         elif len(self.sam_points) > 1:
             # multiple points
-            self.sam_predictor.analyze_mult_points(self.sam_points, img, label=1, prj=self.project)
+            points = [point[:] for point in self.sam_points]
+            labels = self.sam_point_labels[:]
+            QTimer.singleShot(50, lambda: self.sam_predictor.analyze_mult_points(points, labels, img, prj=self.project))
 
     def receive_conversion(self, cv2img):
         self.current_object_converted = cv2img
 
     def receive_sam_prediction(self, contours, points):
         self.is_predicting = False
+        self.parents.set_prediction_busy(False)
         self.is_previewing = True
         self.status_label.setText("Info: Previewing label. Add more points for the object, press Enter/Return to save, or press Esc to restart this label.")
 
@@ -522,12 +575,18 @@ class ImageLabellingControls(QWidget):
         self.update()
         self.repaint()
 
+    def prediction_failed(self, error):
+        self.is_predicting = False
+        self.parents.set_prediction_busy(False)
+        self.status_label.setText(f"Info: {error}")
+
     def undo_label(self):
         print("[ImageLabellingControls] Ctrl+Z Received, undoing last action.")
 
         # remove last sam point
         if self.annotation_type == "SAM":
             self.tmp_sam_points.append(self.sam_points.pop())
+            self.tmp_sam_point_labels.append(self.sam_point_labels.pop())
 
         # remove last box drawn
         elif self.annotation_type == "YOLO":
@@ -540,6 +599,7 @@ class ImageLabellingControls(QWidget):
         # replace from tmp_sam_points
         if self.annotation_type == "SAM" and len(self.tmp_sam_points) > 0:
             self.sam_points.append(self.tmp_sam_points.pop())
+            self.sam_point_labels.append(self.tmp_sam_point_labels.pop())
 
         # replace from tmp_boxes
         elif self.annotation_type == "YOLO":
@@ -551,6 +611,7 @@ class ImageLabellingControls(QWidget):
 
     def clear_tmps(self):
         self.tmp_sam_points.clear()
+        self.tmp_sam_point_labels.clear()
         self.tmp_boxes.clear()
 
     def paintEvent(self, event):
@@ -614,10 +675,12 @@ class ImageLabellingControls(QWidget):
                     for sam_label in self.contours_list:
                         self._draw_sam_from_label(painter, sam_label, QColor("#00ff00"), 2)
 
-                    for point in self.sam_points:
+                    for index, point in enumerate(self.sam_points):
                         px = point[0]
                         py = point[1]
                         wx, wy = self.image_to_widget_coords(px, py)
+                        label = self.sam_point_labels[index] if index < len(self.sam_point_labels) else 1
+                        painter.setPen(QPen(Qt.GlobalColor.red if label == 0 else self.colors[self.color_index], 8, Qt.PenStyle.SolidLine))
                         painter.drawPoint(int(wx), int(wy))
 
         finally:
@@ -702,6 +765,7 @@ class ImageLabellingControls(QWidget):
             self.box_label_2.setText("Point 2: (0, 0)")
         elif self.annotation_type == "SAM":
             self.sam_points.clear()
+            self.sam_point_labels.clear()
             if self.contours_list:
                 self.contours_list.pop()
 
@@ -787,13 +851,15 @@ class ImageLabellingControls(QWidget):
                     json.dump(data, f, indent=4, default=lambda obj: obj.tolist())
 
                 if self.current_object_converted is not None:
-                    converted_path = Path(self.project) / "sam_isolated_objects" / (Path(self.parents.current_image).stem)
+                    img = Path(self.parents.current_image)
+                    parent_folder = Path(self.parents.current_image).parent.stem # can be "singlet_images" or orig video.stem
+                    converted_path = Path(self.project) / "sam_isolated_objects" / parent_folder / img.stem
                     converted_path.mkdir(parents=True, exist_ok=True)
-                    target = f"{Path(self.parents.current_image).stem}_mask_1{Path(self.parents.current_image).suffix}"
+                    target = f"{img.stem}_mask_1{img.suffix}"
                     counter = 1
                     while Path(converted_path / target).exists():
                         counter += 1
-                        target = f"{Path(self.parents.current_image).stem}_mask_{counter}{Path(self.parents.current_image).suffix}"
+                        target = f"{img.stem}_mask_{counter}{img.suffix}"
 
                     cv2.imwrite(str(converted_path / target), self.current_object_converted)
 
@@ -819,6 +885,7 @@ class ImageLabellingControls(QWidget):
             except (FileNotFoundError, json.JSONDecodeError):
                 self.contours_list.clear()
                 self.sam_points.clear()
+                self.sam_point_labels.clear()
                 self.update_visible_boxes([])
                 self.update()
                 return
@@ -829,6 +896,7 @@ class ImageLabellingControls(QWidget):
                 print(f"[ImageLabellingControls] Could not make image path relative to project: {image}")
                 self.contours_list.clear()
                 self.sam_points.clear()
+                self.sam_point_labels.clear()
                 self.update_visible_boxes([])
                 self.update()
                 return
@@ -841,6 +909,7 @@ class ImageLabellingControls(QWidget):
             if current_image is None:
                 print(f"[ImageLabellingControls] No SAM labels found for {img_path}")
                 self.sam_points.clear()
+                self.sam_point_labels.clear()
                 self.contours_list.clear()
                 self.update_visible_boxes([])
                 self.update()
@@ -849,6 +918,7 @@ class ImageLabellingControls(QWidget):
             print(f"[ImageLabellingControls] SAM labels loaded from json for image {img_path}")
 
             self.sam_points.clear()
+            self.sam_point_labels.clear()
             self.contours_list.clear()
 
             for obj_data in current_image.get("objects", []):
@@ -893,6 +963,7 @@ class ImageLabellingControls(QWidget):
 
             # sam_points should represent the object currently being edited, NOT all saved objects.
             self.sam_points.clear()
+            self.sam_point_labels.clear()
 
             self.update_visible_boxes(self.contours_list)
 

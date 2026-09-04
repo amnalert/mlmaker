@@ -1,10 +1,10 @@
 from PySide6.QtWidgets import (
-    QApplication, QGridLayout, QWidget, QPushButton, QMainWindow, QLabel,
+    QGridLayout, QWidget, QPushButton, QMainWindow, QLabel,
     QLineEdit, QHBoxLayout, QVBoxLayout, QInputDialog, QMessageBox,
     QScrollArea
 )
 from PySide6.QtCore import QSize, Qt, QObject, Signal, Slot, QThread, QTimer
-from PySide6.QtGui import QPixmap, QIcon, QCursor, QFont
+from PySide6.QtGui import QPixmap, QIcon, QFont
 import math, json
 from pathlib import Path
 

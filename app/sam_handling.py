@@ -1,15 +1,7 @@
 from PySide6.QtWidgets import QWidget, QMessageBox
-from PySide6.QtCore import Signal, QThread, QObject
-import torch
-import sys, os, json, subprocess
+from PySide6.QtCore import Signal, QThread, QObject, QTimer
 from pathlib import Path
-import cv2
-import numpy as np
 from typing import Optional
-
-from sam2.build_sam import build_sam2
-from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
-from sam2.sam2_image_predictor import SAM2ImagePredictor
 
 INSTALL_LOCATION = Path(__file__).resolve().parent.parent
 SAM_PATH = Path(INSTALL_LOCATION) / "app" / "packages" / "sam2"
@@ -22,6 +14,7 @@ class SAMWorker(QObject):
 
     prediction = Signal(object)
     converted = Signal(object)
+    ready = Signal()
 
     def __init__(self, model, config, device, img_list, project, outdir):
         super().__init__()
@@ -31,9 +24,35 @@ class SAMWorker(QObject):
         self.img_list = img_list
         self.project = project
         self.outdir = outdir
+        self.predictor = None
+
+    def load_predictor(self):
+        try:
+            import torch
+            from sam2.build_sam import build_sam2
+            from sam2.sam2_image_predictor import SAM2ImagePredictor
+
+            self.status.emit("[SAMPredict] Loading SAM2 model...")
+            torch.set_num_threads(1)
+            torch.set_num_interop_threads(1)
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            sam2 = build_sam2(
+                str(self.config),
+                str(self.model),
+                device=device
+            )
+            self.predictor = SAM2ImagePredictor(sam2)
+            self.status.emit(f"[SAMPredict] Model ready on {device}.")
+            self.ready.emit()
+        except Exception as e:
+            self.failed.emit(f"[SAMPredict] Failed to load model: {e}")
 
     def run_auto(self):
         try:
+            import cv2
+            from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
+            from sam2.build_sam import build_sam2
+
             self.status.emit(f"[SAMPass] Loading SAM2 model {self.model.stem}...")
 
             sam2 = build_sam2(
@@ -72,27 +91,42 @@ class SAMWorker(QObject):
             self.failed.emit(f"[SAMPass] Failed: {str(e)}")
 
     def run_point(self, px, py, image, obj):
-        # obj is 0 for background, 1 for object
-        sam2 = build_sam2(str(self.config), str(self.model), device=self.device)
-        predictor = SAM2ImagePredictor(sam2)
+        try:
+            self._run_point(px, py, image, obj)
+        except Exception as e:
+            self.failed.emit(f"[SAMPredict] Point prediction failed: {e}")
 
-        print(f"[SAMPredict] image: {image}")
+    def _run_point(self, px, py, image, obj):
+        # obj is 0 for background, 1 for object
+        import cv2
+        import numpy as np
+
+        if self.predictor is None:
+            self.failed.emit("[SAMPredict] Model is still loading.")
+            return
+
+        image = Path(image)
+        print(f"[SAMPredict] image: {image}", flush=True)
         cv2image = cv2.imread(str(image))
         if cv2image is None:
+            self.failed.emit(f"[SAMPredict] Could not read image: {image}")
             return
         cv2image = cv2.cvtColor(cv2image, cv2.COLOR_BGR2RGB)
+        print("[SAMPredict] Encoding image...", flush=True)
 
-        predictor.set_image(cv2image)
+        self.predictor.set_image(cv2image)
+        print("[SAMPredict] Image encoded.", flush=True)
 
         self.status.emit(f"[SAMPredict] Start prediction for point ({px}, {py}) for image {image.name}")
         point = np.array([[px, py]])
         label = np.array([obj])
 
-        masks, scores, _ = predictor.predict(
+        masks, scores, _ = self.predictor.predict(
             point_coords=point,
             point_labels=label,
             multimask_output=True
         )
+        print("[SAMPredict] Point prediction complete.", flush=True)
 
         best_mask_idx = np.argmax(scores)
         best_mask = masks[best_mask_idx].astype(np.uint8) * 255
@@ -103,26 +137,47 @@ class SAMWorker(QObject):
         formatted_contours = [c.reshape(-1, 2) for c in contours]
 
         self.convert_masks(best_mask, cv2image, image, contours)
+        print("[SAMPredict] Mask converted.", flush=True)
 
         self.prediction.emit(formatted_contours)
+        print("[SAMPredict] Result emitted.", flush=True)
         self.finished.emit()
 
     def run_box(self, box, image):
+        try:
+            self._run_box(box, image)
+        except Exception as e:
+            self.failed.emit(f"[SAMPredict] Box prediction failed: {e}")
+
+    def _run_box(self, box, image):
         # can also predict from a bounding box instead of a single point
-        sam2 = build_sam2(str(self.config), str(self.model), device=self.device)
-        predictor = SAM2ImagePredictor(sam2)
+        import numpy as np
+
+        if self.predictor is None:
+            self.failed.emit("[SAMPredict] Model is still loading.")
+            return
 
         # box needs to be in format [x_min, y_min, x_max, y_max]
         inbox = np.array(box)
 
-        masks, scores, _ = predictor.predict(
+        masks, scores, _ = self.predictor.predict(
             box=inbox,
             multimask_output=False
         )
 
     def run_mult_points(self, points, image, obj):
-        sam2 = build_sam2(str(self.config), str(self.model), device=self.device)
-        predictor = SAM2ImagePredictor(sam2)
+        try:
+            self._run_mult_points(points, image, obj)
+        except Exception as e:
+            self.failed.emit(f"[SAMPredict] Multi-point prediction failed: {e}")
+
+    def _run_mult_points(self, points, image, obj):
+        import cv2
+        import numpy as np
+
+        if self.predictor is None:
+            self.failed.emit("[SAMPredict] Model is still loading.")
+            return
 
         print(f"[SAMPredict] image: {image}")
         cv2image = cv2.imread(str(image))
@@ -130,13 +185,13 @@ class SAMWorker(QObject):
             return
         cv2image = cv2.cvtColor(cv2image, cv2.COLOR_BGR2RGB)
 
-        predictor.set_image(cv2image)
+        self.predictor.set_image(cv2image)
 
         self.status.emit(f"[SAMPredict] Start prediction for multiple points for image {image.name}")
         point = np.array(points) # points should be in format [[x1, y1], [x2, y2], ...]
-        label = np.full(len(points), obj)
+        label = np.asarray(obj, dtype=np.int32)
 
-        masks, scores, _ = predictor.predict(
+        masks, scores, _ = self.predictor.predict(
             point_coords=point,
             point_labels=label,
             multimask_output=True
@@ -156,6 +211,9 @@ class SAMWorker(QObject):
 
 
     def convert_masks(self, masks, image, source_image, t=[]):
+        import cv2
+        import numpy as np
+
         if len(t) > 0:
             mask = masks > 0
 
@@ -248,11 +306,7 @@ class SAMPass(QWidget):
 
         self.sam2 = ""
         self.mask_gen = ""
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-
-        print(f"[SAMPass] Device: {self.device}")
-        if torch.cuda.is_available():
-            print(f"[SAMPass] GPU: {torch.cuda.get_device_name(0)}")
+        self.device = None
 
         self.project = Path(INSTALL_LOCATION)
         self.outdir = Path(INSTALL_LOCATION)
@@ -312,6 +366,13 @@ class SAMPass(QWidget):
         self.start_sam_thread(img_list)
     
     def start_sam_thread(self, img_list):
+        import torch
+
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        print(f"[SAMPass] Device: {self.device}")
+        if torch.cuda.is_available():
+            print(f"[SAMPass] GPU: {torch.cuda.get_device_name(0)}")
+
         self.sam_thread = QThread()
         self.sam_worker = SAMWorker(
             self.model,
@@ -361,6 +422,10 @@ class SAMPass(QWidget):
 class SAMPredict(QWidget):
     prediction = Signal(object, object)
     converted = Signal(object)
+    failed = Signal(str)
+    request_point = Signal(object, object, object, object)
+    request_box = Signal(object, object)
+    request_mult_points = Signal(object, object, object)
 
     def __init__(self, parents):
         super().__init__()
@@ -372,10 +437,44 @@ class SAMPredict(QWidget):
         self.model  = Path(SAM_PATH) / "checkpoints" / "sam2.1_hiera_tiny.pt"
         self.config = Path(SAM_PATH) / "sam2" / "configs" / "sam2.1" / "sam2.1_hiera_t.yaml"
 
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = None
         self.outdir = Path(INSTALL_LOCATION)
 
-        self.sam_worker: Optional[SAMWorker]
+        self.sam_worker: Optional[SAMWorker] = None
+        self.sam_thread: Optional[QThread] = None
+        self.model_ready = False
+        self.current_points = []
+        QTimer.singleShot(0, self.start_model_loader)
+
+    def start_model_loader(self):
+        self.sam_thread = QThread(self)
+        self.sam_worker = SAMWorker(
+            self.model,
+            self.config,
+            self.device,
+            None,
+            self.project,
+            self.outdir
+        )
+        self.sam_worker.moveToThread(self.sam_thread)
+
+        self.sam_thread.started.connect(self.sam_worker.load_predictor)
+        self.request_point.connect(self.sam_worker.run_point)
+        self.request_box.connect(self.sam_worker.run_box)
+        self.request_mult_points.connect(self.sam_worker.run_mult_points)
+
+        self.sam_worker.ready.connect(self.model_loaded)
+        self.sam_worker.status.connect(print)
+        self.sam_worker.prediction.connect(
+            lambda prediction: self.prediction.emit(prediction, self.current_points)
+        )
+        self.sam_worker.converted.connect(self.converted.emit)
+        self.sam_worker.finished.connect(self.sam_finished)
+        self.sam_worker.failed.connect(self.sam_failed)
+        self.sam_thread.start()
+
+    def model_loaded(self):
+        self.model_ready = True
 
     def analyze_point(self, px, py, box, image, label, prj):
         self.current_image = image
@@ -384,52 +483,31 @@ class SAMPredict(QWidget):
 
         self.start_sam_thread(image, [[px, py]], box, label)
 
-    def analyze_mult_points(self, points, image, label, prj):
+    def analyze_mult_points(self, points, labels, image, prj):
         self.current_image = image
         self.project = Path(prj)
         self.outdir = prj / "sam_isolated_objects"
 
-        self.start_sam_thread(image, points, [], label)
+        self.start_sam_thread(image, points, [], labels)
 
     def start_sam_thread(self, image, points, box, label):
-        self.sam_thread = QThread()
-        self.sam_worker = SAMWorker(
-            self.model,
-            self.config,
-            self.device,
-            image,
-            self.project,
-            self.outdir
-        )
+        if not self.model_ready:
+            self.sam_failed("[SAMPredict] Model is still loading. Try again in a moment.")
+            return
 
-        self.sam_worker.moveToThread(self.sam_thread)
+        self.current_points = points
 
         if box:
             if len(box) < 4:
                 return
-            self.sam_thread.started.connect(lambda checked=False, boxx=box, img=image: self.sam_worker.run_box(boxx, img) if self.sam_worker is not None else None)
+            if self.sam_worker is not None:
+                self.sam_worker.run_box(box, image)
         elif len(points) > 1:
-            self.sam_thread.started.connect(lambda checked=False, points=points, img=image: self.sam_worker.run_mult_points(points, img, label) if self.sam_worker is not None else None)
+            if self.sam_worker is not None:
+                self.sam_worker.run_mult_points(points, image, label)
         else:
-            self.sam_thread.started.connect(lambda checked=False, pxx=points[0][0], pyy=points[0][1], img=image: self.sam_worker.run_point(pxx, pyy, img, label) if self.sam_worker is not None else None)
-
-        self.sam_worker.status.connect(print)
-
-        self.sam_worker.prediction.connect(lambda prediction, points=points: self.prediction.emit(prediction, points))
-        self.sam_worker.converted.connect(lambda converted_image: self.converted.emit(converted_image))
-
-        self.sam_worker.finished.connect(self.sam_finished)
-        self.sam_worker.failed.connect(self.sam_failed)
-
-        self.sam_worker.finished.connect(self.sam_thread.quit)
-        self.sam_worker.failed.connect(self.sam_thread.quit)
-
-        self.sam_thread.finished.connect(self.sam_worker.deleteLater)
-        self.sam_thread.finished.connect(self.sam_thread.deleteLater)
-
-        self.sam_thread.finished.connect(self.sam_thread_finished)
-
-        self.sam_thread.start()
+            if self.sam_worker is not None:
+                self.sam_worker.run_point(points[0][0], points[0][1], image, label)
 
     def sam_finished(self):
         print("[SAMPredict] SAM predict finished.")
@@ -441,4 +519,5 @@ class SAMPredict(QWidget):
         self.current_image = Path(INSTALL_LOCATION)
 
     def sam_failed(self, error):
+        self.failed.emit(error)
         QMessageBox.critical(self, "SAM Error", error)
