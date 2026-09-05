@@ -1,10 +1,9 @@
-from PySide6.QtWidgets import QWidget, QFileDialog, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem, QPushButton, QLabel, QProgressBar, QMessageBox
-from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply, QHostAddress, QHostInfo, QTcpServer, QTcpSocket, QUdpSocket
-from PySide6.QtCore import QUrl
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QMessageBox
+from PySide6.QtNetwork import QHostAddress, QTcpServer, QTcpSocket
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from pathlib import Path
-from typing import Optional
-import json, uuid
+from typing import Any, Optional
 
 INSTALL_LOCATION = Path(__file__).resolve().parent.parent
 
@@ -14,7 +13,7 @@ class NetworkExplorer(QWidget):
         self.controller = controller
 
         self.user_folder = ""
-        self.project = ""
+        self.project: Path = Path()
         self.project_uuid = ""
 
         self.mlayout = QVBoxLayout(self)
@@ -25,8 +24,7 @@ class NetworkExplorer(QWidget):
         self.subtitle = QFont()
         self.subtitle.setPointSize(16)
 
-        # TCP Manager
-        self.tcp_manager: Optional[TCPManager] = None
+        self.tcp_manager = None
 
         # Info
         self.setWindowTitle("Network Explorer")
@@ -35,19 +33,28 @@ class NetworkExplorer(QWidget):
         self.project_label = QLabel("Project: ")
         self.project_label.setFont(self.subtitle)
 
+        self.mlayout.addWidget(self.main_label, alignment=(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter))
+        self.mlayout.addWidget(self.project_label, alignment=(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignCenter))
 
 
     def init_tcp_manager(self):
-        self.tcp_manager = TCPManager(self, self.controller)
+        if self.tcp_manager is None:
+            self.tcp_manager = TCPManager(self, self.controller)
+
         # Interactables
         self.start_server_btn = QPushButton("Start TCP Server")
-        self.start_server_btn.clicked.connect(self.tcp_manager.start_server)
+        self.start_server_btn.clicked.connect(lambda checked=False: self.tcp_manager.start_server(self.project)) # type: ignore
         self.check_server_btn = QPushButton("View TCP Servers")
         self.check_server_btn.clicked.connect(self.tcp_manager.check_servers)
+
+        self.buttons_layout = QHBoxLayout()
+        self.buttons_layout.addWidget(self.start_server_btn, alignment=Qt.AlignmentFlag.AlignLeft)
+        self.buttons_layout.addWidget(self.check_server_btn, alignment=Qt.AlignmentFlag.AlignRight)
+
+        self.mlayout.addLayout(self.buttons_layout)
     
-    def receive_prj_info(self, user, prj_folder):
-        if self.tcp_manager is None:
-            self.init_tcp_manager()
+    def receive_prj_info(self, user: str, prj_folder: str | Path) -> None:
+        self.init_tcp_manager()
 
         self.user_folder = user
         self.project = Path(prj_folder)
@@ -56,25 +63,26 @@ class NetworkExplorer(QWidget):
 
 
 class TCPManager(QWidget):
-    def __init__(self, parent, controller):
+    def __init__(self, parent: NetworkExplorer, controller: Any):
         super().__init__()
         self.controller = controller
         self.parents = parent
 
         # Connection
-        self.server = None
-        self.connections = []
-        self.buffers = {}
-        self.img_transfers = {}
+        self.server: Optional[QTcpServer] = None
+        self.connections: list[QTcpSocket] = []
+        self.buffers: dict[QTcpSocket, bytearray] = {}
+        self.img_transfers: dict[str, Any] = {}
 
         # Info
         self.project = Path(INSTALL_LOCATION)
-
-        # Download
         self.download_folder = Path(INSTALL_LOCATION)
-        self.download_folder.mkdir(parents=True, exist_ok=True)
 
     def start_server(self, prj):
+        if self.server is not None:
+            self.stop_server()
+            return
+
         reply = QMessageBox.question(
             self,
             "Start TCP Server",
@@ -85,15 +93,9 @@ class TCPManager(QWidget):
         if reply == QMessageBox.StandardButton.No:
             return
 
-        self.project = prj
-
-        # Download
-        self.download_folder = Path(self.project) / "tcp_downloads"
+        self.project = Path(prj)
+        self.download_folder = self.project / "tcp_downloads"
         self.download_folder.mkdir(parents=True, exist_ok=True)
-
-        if self.server is not None:
-            self.stop_server()
-            return
 
         self.server = QTcpServer(self)
         self.server.newConnection.connect(
@@ -106,7 +108,7 @@ class TCPManager(QWidget):
             self.server = None
             return
 
-        self.parents.tcp_connect_button.setText("Stop Server")
+        self.parents.start_server_btn.setText("Stop Server")
         print("TCP server listening on port 5000")
 
     def stop_server(self):
@@ -125,10 +127,10 @@ class TCPManager(QWidget):
         self.server.deleteLater()
         self.server = None
 
-        self.parents.tcp_connect_button.setText("Send/Receive Data")
+        self.parents.start_server_btn.setText("Start TCP Server")
         print("TCP server stopped")
 
-    def handle_connection(self):
+    def handle_connection(self) -> None:
         if self.server is None:
             return
 
@@ -167,7 +169,7 @@ class TCPManager(QWidget):
                 self.buffers[socket].split(b"\n", 1)
 
             # receive as string
-            message = message.decode("utf-8")
+            message = message.decode("utf-8", errors="replace")
             print("Received:", message)
 
     def send_data(self, socket, message):
@@ -187,7 +189,7 @@ class TCPManager(QWidget):
         pass
 
 
-    def remove_connection(self, socket):
+    def remove_connection(self, socket: QTcpSocket) -> None:
         print(
             "Disconnected:",
             socket.peerAddress().toString()
@@ -198,5 +200,5 @@ class TCPManager(QWidget):
 
         socket.deleteLater()
 
-    def check_servers(self):
+    def check_servers(self) -> None:
         return

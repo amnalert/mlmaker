@@ -300,7 +300,7 @@ class ProjectView(QMainWindow):
     def load_saved_images(self, prj, username, user_folder, prj_uuid):
         if self.controller.proj_explorer.current_user_location == "shared":
             self.tcp_connect_button = QPushButton("Send/Receive Data")
-            self.tcp_connect_button.setEnabled(False)
+            self.tcp_connect_button.setEnabled(True)
             self.tcp_connect_button.setFixedHeight(40)
             self.tcp_connect_button.clicked.connect(self.tcp_button)
             self.page_layout.addWidget(self.tcp_connect_button)
