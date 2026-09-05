@@ -1,22 +1,202 @@
 from PySide6.QtWidgets import QWidget, QFileDialog, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem, QPushButton, QLabel, QProgressBar, QMessageBox
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply, QHostAddress, QHostInfo, QTcpServer, QTcpSocket, QUdpSocket
 from PySide6.QtCore import QUrl
+from PySide6.QtGui import QFont
 from pathlib import Path
 from typing import Optional
 import json, uuid
+
+INSTALL_LOCATION = Path(__file__).resolve().parent.parent
 
 class NetworkExplorer(QWidget):
     def __init__(self, controller):
         super().__init__()
         self.controller = controller
 
-        self.username = ""
+        self.user_folder = ""
         self.project = ""
-        self.project_name = ""
         self.project_uuid = ""
 
-    def receive_data(self, user, prj_folder):
-        self.username = str(user)
+        self.mlayout = QVBoxLayout(self)
+
+        # Fonts
+        self.title = QFont()
+        self.title.setPointSize(32)
+        self.subtitle = QFont()
+        self.subtitle.setPointSize(16)
+
+        # TCP Manager
+        self.tcp_manager: Optional[TCPManager] = None
+
+        # Info
+        self.setWindowTitle("Network Explorer")
+        self.main_label = QLabel("Network Explorer")
+        self.main_label.setFont(self.title)
+        self.project_label = QLabel("Project: ")
+        self.project_label.setFont(self.subtitle)
+
+
+
+    def init_tcp_manager(self):
+        self.tcp_manager = TCPManager(self, self.controller)
+        # Interactables
+        self.start_server_btn = QPushButton("Start TCP Server")
+        self.start_server_btn.clicked.connect(self.tcp_manager.start_server)
+        self.check_server_btn = QPushButton("View TCP Servers")
+        self.check_server_btn.clicked.connect(self.tcp_manager.check_servers)
+    
+    def receive_prj_info(self, user, prj_folder):
+        if self.tcp_manager is None:
+            self.init_tcp_manager()
+
+        self.user_folder = user
         self.project = Path(prj_folder)
-        self.project_name = Path(prj_folder.stem)
-        
+
+        self.project_label.setText(f"Project: {self.project.stem}")
+
+
+class TCPManager(QWidget):
+    def __init__(self, parent, controller):
+        super().__init__()
+        self.controller = controller
+        self.parents = parent
+
+        # Connection
+        self.server = None
+        self.connections = []
+        self.buffers = {}
+        self.img_transfers = {}
+
+        # Info
+        self.project = Path(INSTALL_LOCATION)
+
+        # Download
+        self.download_folder = Path(INSTALL_LOCATION)
+        self.download_folder.mkdir(parents=True, exist_ok=True)
+
+    def start_server(self, prj):
+        reply = QMessageBox.question(
+            self,
+            "Start TCP Server",
+            "Are you ready to start a TCP server which would allow others to connect and share project information?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        if reply == QMessageBox.StandardButton.No:
+            return
+
+        self.project = prj
+
+        # Download
+        self.download_folder = Path(self.project) / "tcp_downloads"
+        self.download_folder.mkdir(parents=True, exist_ok=True)
+
+        if self.server is not None:
+            self.stop_server()
+            return
+
+        self.server = QTcpServer(self)
+        self.server.newConnection.connect(
+            self.handle_connection
+        )
+
+        if not self.server.listen(QHostAddress.SpecialAddress.Any, 5000):
+            print("Failed to start server:", self.server.errorString())
+            self.server.deleteLater()
+            self.server = None
+            return
+
+        self.parents.tcp_connect_button.setText("Stop Server")
+        print("TCP server listening on port 5000")
+
+    def stop_server(self):
+        if self.server is None:
+            return
+
+        self.server.close()
+
+        for socket in self.connections:
+            self.remove_connection(socket)
+
+        self.connections.clear()
+        self.buffers.clear()
+        self.img_transfers.clear()
+
+        self.server.deleteLater()
+        self.server = None
+
+        self.parents.tcp_connect_button.setText("Send/Receive Data")
+        print("TCP server stopped")
+
+    def handle_connection(self):
+        if self.server is None:
+            return
+
+        socket = self.server.nextPendingConnection()
+
+        if socket is None:
+            return
+
+        self.connections.append(socket)
+        self.buffers[socket] = bytearray()
+
+        print(
+            "Connected",
+            socket.peerAddress().toString(),
+            socket.peerPort()
+        )
+
+        # "tell me when the other computer has sent me data"
+        socket.readyRead.connect(
+            lambda socket=socket: self.read_data(socket)
+        )
+
+        socket.disconnected.connect(
+            lambda socket=socket: self.remove_connection(socket)
+        )
+
+    def read_data(self, socket):
+        # Read all available bytes
+        # data = socket.readAll()
+        # print(f"Received: {bytes(data)}")
+
+        self.buffers[socket].extend(bytes(socket.readAll()))
+        # Protocol: newline
+        while b"\n" in self.buffers[socket]:
+            message, self.buffers[socket] = \
+                self.buffers[socket].split(b"\n", 1)
+
+            # receive as string
+            message = message.decode("utf-8")
+            print("Received:", message)
+
+    def send_data(self, socket, message):
+        # Send string as bytes
+        # readyRead doesn't necessarily mean that the data goes all in one piece, so we need a protocol
+        # one way is to buffer incoming data to wait for \n (newlines)
+        # socket.write(b"b for convert to bytes\n") # \n signals the end of this chunk
+        # socket.write(b"hello client\n")
+
+        # send a python string
+        # socket.write(message.encode("utf-8"))
+
+        # JSON messages
+        # {"type":"message","data":"hello"}
+        # {"type":"image","name":"img1.jpg","size":999999,"id":"8ufna02"}
+        # <999999 bytes of JPEG data>
+        pass
+
+
+    def remove_connection(self, socket):
+        print(
+            "Disconnected:",
+            socket.peerAddress().toString()
+        )
+
+        if socket in self.connections:
+            self.connections.remove(socket)
+
+        socket.deleteLater()
+
+    def check_servers(self):
+        return

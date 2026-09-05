@@ -130,7 +130,7 @@ class ProjectExplorer(QMainWindow):
 
     def load_saved_pjs(self, ptype):
         self.user_folder = self.controller.user_folder
-        self.username = self.controller.username
+        self.username = self.user_folder.stem
 
         self.load_and_update_json()
 
@@ -232,11 +232,7 @@ class ProjectExplorer(QMainWindow):
                     self.prj_names[pname] = project_data
                     self.prj_uuids[project_uuid] = project_data
                 else:
-                    print(
-                        "This block should not run unless the JSON was "
-                        "manually modified while the program is running."
-                    )
-                    QApplication.quit()
+                    # project is likely in both shared and network projects under the same name and uuid, which should be fine
                     return
 
             else:
@@ -463,7 +459,10 @@ class ProjectExplorer(QMainWindow):
         if reply == QMessageBox.StandardButton.Yes:
             n = 1
             prj_name = prj.name
-            existing_names = [p.stem for p in self.projects]
+            if copytotype == "shared":
+                existing_names = [p.stem for p in Path(self.user_folder / "shared_projects").iterdir() if p.is_dir()]
+            elif copytotype == "local":
+                existing_names = [p.stem for p in Path(self.user_folder / "projects").iterdir() if p.is_dir() ]
 
             while prj_name in existing_names:
                 n += 1
@@ -476,7 +475,7 @@ class ProjectExplorer(QMainWindow):
                     self,
                     "Duplicate Project Name",
                     f"Are you sure you want to copy '{prj.stem}', which is the "
-                    f"same name as an existing {ptype} project? It will be stored "
+                    f"same name as an existing {copytotype} project? It will be stored "
                     f"in '{self.username}/"
                     f"{'projects' if copytotype == 'local' else 'shared_projects'}/"
                     f"{prj_name}'",

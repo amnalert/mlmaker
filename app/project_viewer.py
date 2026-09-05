@@ -10,7 +10,6 @@ from pathlib import Path
 
 from dataloader import UploadFiles
 from sam_handling import SAMPass
-from tcp_manager import TCPManager
 
 INSTALL_LOCATION = Path(__file__).resolve().parent.parent
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
@@ -289,24 +288,23 @@ class ProjectView(QMainWindow):
         )
         self.page_layout.addWidget(self.back_btn)
 
-        self.tcp_manager = TCPManager(self, self.controller)
-
-        self.tcp_connect_button = QPushButton("Send/Receive Data")
-        self.tcp_connect_button.setEnabled(False)
-        self.tcp_connect_button.setFixedHeight(40)
-        self.tcp_connect_button.clicked.connect(self.tcp_button)
-        self.page_layout.addWidget(self.tcp_connect_button)
-
         self.mlayout.addLayout(self.page_layout)
         
     def tcp_button(self):
-        self.controller.network_page.receive_data(
-            self.username,
+        self.controller.network_page.receive_prj_info(
+            self.user_folder,
             self.prj_folder
         )
         self.controller.switch_page(5)
 
     def load_saved_images(self, prj, username, user_folder, prj_uuid):
+        if self.controller.proj_explorer.current_user_location == "shared":
+            self.tcp_connect_button = QPushButton("Send/Receive Data")
+            self.tcp_connect_button.setEnabled(False)
+            self.tcp_connect_button.setFixedHeight(40)
+            self.tcp_connect_button.clicked.connect(self.tcp_button)
+            self.page_layout.addWidget(self.tcp_connect_button)
+
         if self._load_thread is not None:
             return
 
