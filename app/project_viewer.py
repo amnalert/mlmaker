@@ -1,3 +1,5 @@
+from email.mime import image
+
 from PySide6.QtWidgets import (
     QGridLayout, QWidget, QPushButton, QMainWindow, QLabel,
     QLineEdit, QHBoxLayout, QVBoxLayout, QInputDialog, QMessageBox,
@@ -81,9 +83,40 @@ class ProjectLoadWorker(QObject):
                 except ValueError:
                     pass
 
-            self.needs_fp_file.write_text(
-                "\n".join(relative_needs_fp)
-            )
+            sam_labels_file = self.project_folder / "image_labels" / "sam_labels.json"
+            sam_images = []
+            if sam_labels_file.exists():
+                try:
+                    with open(sam_labels_file, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    sam_images = data.get("images", []) if isinstance(data, dict) else []
+                except (OSError, ValueError, json.JSONDecodeError):
+                    sam_images = []
+
+            valid_images = []
+
+            for image in images:
+                resolved = image.resolve()
+                img_path = resolved.relative_to(self.project_folder.resolve()).as_posix()
+                current_image = next(
+                    (img for img in sam_images if isinstance(img, dict) and img.get("image") == img_path),
+                    None
+                )
+
+                if current_image is None or not current_image.get("objects"):
+                    if resolved not in needs_fp_set:
+                        needs_fp_set.add(resolved)
+                        needs_fp.append(resolved)
+                        try:
+                            relative_needs_fp.append(str(resolved.relative_to(self.project_folder)))
+                        except ValueError:
+                            relative_needs_fp.append(str(resolved))
+                else:
+                    valid_images.append(image)
+
+            images = sorted(valid_images, key=lambda p: p.as_posix().lower())
+            needs_fp = sorted(needs_fp, key=lambda p: p.as_posix().lower())
+            self.needs_fp_file.write_text("\n".join(dict.fromkeys(relative_needs_fp)), encoding="utf-8")
 
             class_data = class_file.read_text(errors="ignore").strip()
             project_classes = [
@@ -278,8 +311,8 @@ class ProjectView(QMainWindow):
             self.change_images_per_page
         )
 
-        self.page_layout.addWidget(self.image_count_label)
-        self.page_layout.addWidget(self.image_count_input)
+        self.page_layout.addWidget(self.image_count_label, alignment=Qt.AlignmentFlag.AlignRight)
+        self.page_layout.addWidget(self.image_count_input, alignment=Qt.AlignmentFlag.AlignRight)
 
         self.back_btn = QPushButton("Back")
         self.back_btn.setFixedHeight(40)
@@ -371,22 +404,10 @@ class ProjectView(QMainWindow):
 
     @Slot(object, object, object, object)
     def _images_loaded(self, images, needs_fp, project_classes, labels_folder):
-        self.images = [
-            Path(image)
-            for image in images
-            if Path(image).is_file()
-        ]
+        self.images = [ Path(image) for image in images if Path(image).is_file() ]
+        self.needs_fp = [ Path(image) for image in needs_fp if Path(image).is_file() ]
 
-        self.needs_fp = [
-            Path(image)
-            for image in needs_fp
-            if Path(image).is_file()
-        ]
-
-        self._needs_fp_set = {
-            path.resolve()
-            for path in self.needs_fp
-        }
+        self._needs_fp_set = {path.resolve() for path in self.needs_fp}
 
         self.project_classes = list(project_classes)
         self._loading_project = False
@@ -596,13 +617,25 @@ class ProjectView(QMainWindow):
         info.setContentsMargins(0, 0, 0, 0)
 
         label_file = self._label_path_for_image(image)
+        label_file_sam = Path(self.current_project) / "image_labels" / "sam_labels.json"
+
+        with open(label_file_sam, "r") as f:
+            data = json.load(f)
 
         label_count = 0
+
+        img_path = Path(image).resolve().relative_to(Path(self.current_project).resolve()).as_posix()
+        images = data.get("images", [])
+        current_image = next((img for img in images if img.get("image") == img_path), None)
+        if current_image is not None:
+            if len(current_image.get("objects", [])) != 0:
+                for _object in current_image.get("objects", []):
+                    label_count += 1
 
         try:
             if label_file.exists():
                 with open(label_file, "r", errors="ignore") as f:
-                    label_count = sum(1 for line in f if line.strip())
+                    label_count += sum(1 for line in f if line.strip())
         except OSError:
             pass
 
@@ -660,7 +693,7 @@ class ProjectView(QMainWindow):
             / f"{relative.stem}.txt"
         )
 
-    def delete_this_image(self, image):
+    def delete_this_image(self, image, passdown=False):
         image = Path(image)
 
         if not image.is_file():
@@ -705,6 +738,9 @@ class ProjectView(QMainWindow):
             img for img in self.images
             if img.resolve() != image.resolve()
         ]
+
+        if passdown:
+            self.controller.image_viewer.view_image(passdown, self.current_project, self.images)
 
         self.update_image_page()
         self.check_uploaded_labels()

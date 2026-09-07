@@ -2,6 +2,7 @@ from PySide6.QtWidgets import QWidget, QMessageBox
 from PySide6.QtCore import Signal, QThread, QObject, QTimer
 from pathlib import Path
 from typing import Optional
+import json
 
 INSTALL_LOCATION = Path(__file__).resolve().parent.parent
 SAM_PATH = Path(INSTALL_LOCATION) / "app" / "packages" / "sam2"
@@ -33,8 +34,17 @@ class SAMWorker(QObject):
             from sam2.sam2_image_predictor import SAM2ImagePredictor
 
             self.status.emit("[SAMPredict] Loading SAM2 model...")
-            torch.set_num_threads(1)
-            torch.set_num_interop_threads(1)
+
+            try:
+                torch.set_num_threads(1)
+            except RuntimeError:
+                pass
+
+            try:
+                torch.set_num_interop_threads(1)
+            except RuntimeError:
+                pass
+
             device = "cuda" if torch.cuda.is_available() else "cpu"
             sam2 = build_sam2(
                 str(self.config),
@@ -50,37 +60,112 @@ class SAMWorker(QObject):
     def run_auto(self):
         try:
             import cv2
-            from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
-            from sam2.build_sam import build_sam2
+            import numpy as np
 
-            self.status.emit(f"[SAMPass] Loading SAM2 model {self.model.stem}...")
+            if self.predictor is None:
+                self.failed.emit("[SAMPass] Model is not loaded.")
+                return
 
-            sam2 = build_sam2(
-                str(self.config),
-                str(self.model),
-                device=self.device,
-                apply_postprocessing=False
-            )
+            total = len(self.img_list or [])
 
-            mask_gen = SAM2AutomaticMaskGenerator(sam2)
-            total = len(self.img_list)
-
-            for index, img in enumerate(self.img_list, 1):
-                img = Path(img)
-
+            for index, raw_img in enumerate(self.img_list or [], 1):
+                img = Path(raw_img)
                 image = cv2.imread(str(img))
                 if image is None:
                     self.progress.emit(index, total)
                     continue
 
-                image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+                height, width = image.shape[:2]
+                cx = width // 2
+                cy = height // 2
 
-                self.status.emit(f"[SAMPass] Processing {img.name}...")
-                masks = mask_gen.generate(image)
+                self.status.emit(f"[SAMPass] Processing {img.name} at center point ({cx}, {cy})...")
 
-                if masks:
-                    self.status.emit(f"[SAMPass] Image {img.name} had {len(masks)} objects. Converting to singles.")
-                    self.convert_masks(masks, image, img)
+                rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+                self.predictor.set_image(rgb_image)
+
+                point = np.array([[cx, cy]], dtype=np.float32)
+                label = np.array([1], dtype=np.int32)
+                masks, scores, _ = self.predictor.predict(
+                    point_coords=point,
+                    point_labels=label,
+                    multimask_output=True
+                )
+
+                if len(masks) == 0:
+                    self.progress.emit(index, total)
+                    continue
+
+                best_mask_idx = int(np.argmax(scores))
+                best_mask = masks[best_mask_idx].astype(np.uint8)
+                mask = best_mask > 0
+
+                fg_object = np.zeros_like(rgb_image)
+                fg_object[mask] = rgb_image[mask]
+
+                ys, xs = np.where(mask)
+                if xs.size == 0 or ys.size == 0:
+                    self.progress.emit(index, total)
+                    continue
+
+                x, y, w, h = cv2.boundingRect((mask.astype(np.uint8) * 255).astype(np.uint8))
+                cropped_fg = fg_object[y:y+h, x:x+w]
+                cropped_mask = mask[y:y+h, x:x+w]
+
+                max_side = max(w, h)
+                raw_noise = np.random.choice([0, 255], size=(max_side, max_side), p=[0.5, 0.5]).astype(np.uint8)
+                square_static = cv2.cvtColor(raw_noise, cv2.COLOR_GRAY2RGB)
+
+                pad_x = (max_side - w) // 2
+                pad_y = (max_side - h) // 2
+                square_static[pad_y:pad_y+h, pad_x:pad_x+w][cropped_mask] = cropped_fg[cropped_mask]
+
+                output_image = cv2.cvtColor(square_static, cv2.COLOR_RGB2BGR)
+
+                try:
+                    rel_parent = img.parent.relative_to(self.project)
+                except ValueError:
+                    rel_parent = img.parent
+
+                out_dir = self.project / "auto_sam_isolated" / rel_parent / img.stem
+                out_dir.mkdir(parents=True, exist_ok=True)
+
+                out_path = out_dir / img.name
+                saved = cv2.imwrite(str(out_path), output_image)
+                if saved:
+                    self.status.emit(f"[SAMPass] Saved SAM output to {out_path}")
+                else:
+                    self.status.emit(f"[SAMPass] Could not save output to {out_path}")
+
+                label_json = self.project / "image_labels" / "sam_labels.json"
+                label_json.parent.mkdir(parents=True, exist_ok=True)
+
+                try:
+                    if label_json.exists():
+                        with open(label_json, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                    else:
+                        data = {"images": []}
+                except (OSError, ValueError):
+                    data = {"images": []}
+
+                if not isinstance(data, dict):
+                    data = {"images": []}
+
+                rel_image_path = img.resolve().relative_to(self.project.resolve()).as_posix()
+                image_entry = next(
+                    (entry for entry in data.get("images", []) if isinstance(entry, dict) and entry.get("image") == rel_image_path),
+                    None
+                )
+
+                if image_entry is None:
+                    image_entry = {"image": rel_image_path, "objects": []}
+                    data.setdefault("images", []).append(image_entry)
+
+                image_entry["objects"] = [{"label": "auto_sam", "mask": "auto_sam_isolated"}]
+
+                with open(label_json, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2)
 
                 self.update_fp_file(img)
                 self.progress.emit(index, total)
@@ -347,22 +432,6 @@ class SAMPass(QWidget):
             self.model  = self.checkpoints[1]
             self.config = self.model_cfgs[1]
 
-        #if choose:
-        #    reply = QMessageBox.question(
-        #        self,
-        #        "Set Default SAM Size",
-        #        f"Would you like to set {msg.clickedButton().text()} as your default size SAM model?",
-        #        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        #        QMessageBox.StandardButton.No
-        #    )
-        #    if reply == QMessageBox.StandardButton.Yes:
-        #        with open(user_file, "r") as f:
-        #            data = json.load(f)
-        #        data[self.username]["default_sam_size"] = msg.clickedButton().text()
-        #        with open(user_file, "w") as f:
-        #            json.dump(data, f, indent=4)
-        #        # WIP: Will add user config editing later
-
         self.start_sam_thread(img_list)
     
     def start_sam_thread(self, img_list):
@@ -385,7 +454,8 @@ class SAMPass(QWidget):
 
         self.sam_worker.moveToThread(self.sam_thread)
 
-        self.sam_thread.started.connect(self.sam_worker.run_auto)
+        self.sam_thread.started.connect(self.sam_worker.load_predictor)
+        self.sam_worker.ready.connect(self.sam_worker.run_auto)
 
         self.sam_worker.progress.connect(self.sam_progress)
         self.sam_worker.status.connect(print)

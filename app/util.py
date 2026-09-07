@@ -1,6 +1,9 @@
 from PySide6.QtWidgets import QLabel, QSizePolicy
 from PySide6.QtGui import QFontMetrics
 from PySide6.QtCore import QTimer, Qt
+from pathlib import Path
+
+INSTALL_LOCATION = Path(__file__).resolve().parent.parent
 
 class AutoScalingLabel(QLabel):
     def __init__(self, text="", parent=None):
