@@ -123,7 +123,7 @@ class SAMWorker(QObject):
                 output_image = cv2.cvtColor(square_static, cv2.COLOR_RGB2BGR)
 
                 try:
-                    rel_parent = img.parent.relative_to(self.project)
+                    rel_parent = img.parent.relative_to((Path(self.project) / "image_uploads"))
                 except ValueError:
                     rel_parent = img.parent
 
@@ -137,7 +137,7 @@ class SAMWorker(QObject):
                 else:
                     self.status.emit(f"[SAMPass] Could not save output to {out_path}")
 
-                label_json = self.project / "image_labels" / "sam_labels.json"
+                label_json = self.project / "auto_sam_isolated" / "sam_labels.json"
                 label_json.parent.mkdir(parents=True, exist_ok=True)
 
                 try:
@@ -145,6 +145,7 @@ class SAMWorker(QObject):
                         with open(label_json, "r", encoding="utf-8") as f:
                             data = json.load(f)
                     else:
+                        label_json.touch()
                         data = {"images": []}
                 except (OSError, ValueError):
                     data = {"images": []}

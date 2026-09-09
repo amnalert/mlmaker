@@ -8,6 +8,7 @@ import shutil, json, cv2
 from sam_handling import SAMPredict
 
 INSTALL_LOCATION = Path(__file__).resolve().parent.parent
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
 class ImageContainer(QWidget):
     def __init__(self, annotating, parents, controller):
@@ -64,9 +65,6 @@ class ImageContainer(QWidget):
         self.set_image_input.returnPressed.connect(self.set_image)
         belowimglayout.addWidget(self.set_image_input, alignment=(Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight))
 
-        self.delete_image_btn = QPushButton("Delete")
-        self.delete_image_btn.clicked.connect(self.delete_img)
-
         self.image_viewer = ImageViewer(self)
         imglayout.addWidget(self.image_viewer, stretch=1)
 
@@ -87,6 +85,12 @@ class ImageContainer(QWidget):
             belowimglayout.addWidget(self.image_name, alignment=Qt.AlignmentFlag.AlignRight)
 
         else:
+            # manual delete button
+            self.delete_image_btn = QPushButton("Delete")
+            self.delete_image_btn.clicked.connect(self.delete_img)
+            imglayout.addWidget(self.delete_image_btn)
+
+            # Annotation controls
             self.img_labelling_controls = ImageLabellingControls(self.image_viewer.image_label, self.image_viewer, self)
             self.img_labelling_controls.setObjectName("image_annotation_overlay")
             self.img_labelling_controls.setGeometry(0, 0, self.image_viewer.image_label.width(), self.image_viewer.image_label.height())
@@ -107,6 +111,7 @@ class ImageContainer(QWidget):
             self.annotation_type_label = self.img_labelling_controls.annotation_type_label
             self.change_annotation_type = self.img_labelling_controls.change_annotation_type
 
+            # Right layout
             right_layout = QVBoxLayout()
             main_layout.addLayout(right_layout, 1)
 
@@ -121,6 +126,7 @@ class ImageContainer(QWidget):
             right_layout.addWidget(self.annotation_type_label, alignment=(Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight))
             right_layout.addWidget(self.change_annotation_type, alignment=(Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight))
 
+            # Prediction progress bar
             self.prediction_overlay = QWidget(self)
             self.prediction_overlay.setStyleSheet(
                 "QWidget { background-color: rgba(20, 20, 20, 190); }"
@@ -873,7 +879,7 @@ class ImageLabellingControls(QWidget):
                 image_data["objects"].append(obj_data)
 
                 with open(self.image_label_file, "w") as f:
-                    json.dump(data, f, indent=4, default=lambda obj: obj.tolist())
+                    json.dump(data, f, indent=2, default=lambda obj: obj.tolist())
 
                 if self.current_object_converted is not None:
                     img = Path(self.parents.current_image)
@@ -1165,7 +1171,7 @@ class ImageLabellingControls(QWidget):
                 image_data["objects"] = [ obj for obj in image_data["objects"] if obj["id"] != label[2] ]
         
             with open(self.image_label_file, "w") as f:
-                json.dump(data, f, indent=4, default=lambda obj: obj.tolist())
+                json.dump(data, f, indent=2, default=lambda obj: obj.tolist())
 
             # check saved masks and remove, mask number should be same as label[2] + 1
             this_img_masks = Path(self.project) / "sam_isolated_objects" / self.parents.current_image.stem / f"{self.parents.current_image.stem}_mask_{label[2] + 1}{self.parents.current_image.suffix}"
@@ -1224,7 +1230,7 @@ class ImageLabellingControls(QWidget):
                     break
 
             with open(self.image_label_file, "w") as f:
-                json.dump(data, f, indent=4, default=lambda obj: obj.tolist())
+                json.dump(data, f, indent=2, default=lambda obj: obj.tolist())
         
         self.load_saved_boxes(self.image_label_file, self.parents.current_image)
 
@@ -1608,21 +1614,439 @@ class ImageViewer(QWidget):
 
 
 class FirstPass(QWidget):
-    def __init__(self, parent=None):
-        super().__init__(parent)
+    def __init__(self, controller):
+        super().__init__()
 
-        self.setWindowTitle("First Pass Image Viewer")
-        self.setObjectName("first_pass_image_viewer")
+        self.controller = controller
+        self.setWindowTitle("First Pass")
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
-        self.image_viewer = ImageViewer(self)
-        self.image_viewer.setObjectName("first_pass_image_viewer_image_viewer")
+        self.pt32b = QFont()
+        self.pt32b.setBold(True)
+        self.pt32b.setPointSize(32)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self.image_viewer)
+        self.controls_dialog = QLabel(
+            """
+            Comma( , )  - Mark to delete
+            Period( . ) - Mark to save
+            Z           - Previous Frame / Back
+            X           - Next Frame / Skip
 
-    def begin_pass(self, image_list):
-        if not image_list:
+            C Key       - Toggle auto skip to next Frame on Left/Right Key press(Default: True)
+            V Key       - Show this information box again
+
+            Enter Key   - Mark all remaining frames / Confirm Selection(Opens dialog box before deletion)
+            Escape Key  - Options Menu
+            """
+        )
+
+        self.ctrls = QMessageBox()
+        self.ctrls.setWindowTitle("How to do a First Pass")
+        self.ctrls.setText(
+            f"""
+            After uploading a video, it converts itself to individual frames. It is useful to run a 'First Pass' by quickly going through all frames and selecting frames for deletion(e.g. if the frame has no objects in it).
+
+            It is also helpful to do this if you ran an automatic SAM pass(my handling runs SAM using the center pixel of each input image) to select the masks that are not what you're looking for, and manually do the rest.
+
+            The controls are as follows:
+            {self.controls_dialog.text()}
+
+            Press the Escape Key for exit options, or press "Enter" when there are 0 unmarked frames remaining.
+            """
+        )
+
+        self.ctrls.setStyleSheet("QLabel { min-width: 750px; min-height: 150px; }")
+
+        self.menu_dialog = QWidget(self, Qt.WindowType.Dialog)
+        screen = QApplication.primaryScreen().availableGeometry()
+        self.menu_dialog.resize(int(screen.width() * 0.5), int(screen.height() * 0.5))
+        self.menu_dialog.move(screen.center() - self.menu_dialog.rect().center())
+        self.menu_layout = QVBoxLayout()
+        self.menu_dialog.setLayout(self.menu_layout)
+        self.menu_text = QLabel("First Pass Menu")
+        self.menu_text.setFont(self.pt32b)
+
+        # self.cancel_vid_btn = QPushButton("Remove Video From Project")
+        # self.cancel_vid_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+        self.discard_quit_btn = QPushButton("Discard choices and Exit")
+        self.discard_quit_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+        self.save_later_btn = QPushButton("Delete selected and Exit")
+        self.save_later_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+        # self.cancel_vid_btn.clicked.connect(lambda _: self.cancel_this_video())
+        self.save_later_btn.clicked.connect(lambda _: self.save_and_quit())
+        self.discard_quit_btn.clicked.connect(lambda _: self.discard_and_quit())
+
+        # self.menu_layout.addWidget(self.cancel_vid_btn,alignment=(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter))
+        self.menu_layout.addWidget(self.menu_text, alignment=(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter))
+        self.menu_layout.addWidget(self.save_later_btn, alignment=(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter))
+        self.menu_layout.addWidget(self.discard_quit_btn, alignment=(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter))
+        self.menu_dialog.hide()
+
+        self.image_view = ImageContainer(False, self, self.controller)
+        self.main_layout = QVBoxLayout(self)
+        self.main_layout.addWidget(self.image_view, stretch=1)
+
+        self.imgs_remaining_lbl = QLabel("Unmarked frames: 0")
+        self.main_layout.addWidget(self.imgs_remaining_lbl, alignment=(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom))
+
+        self.current_project = Path(INSTALL_LOCATION)
+        self.current_video = Path(INSTALL_LOCATION)
+        self.current_uuid = ""
+        self.current_user = ""
+
+        self.all_input_imgs = []
+        self.unmarked_imgs = []
+        self.marked_del = []
+        self.marked_save = []
+
+        self.current_img_index = 0
+
+        self.auto_skip = True
+
+        self.needs_fp_file = Path(INSTALL_LOCATION)
+        self.sam_labels = Path(INSTALL_LOCATION)
+        self.tmp_sam_labels = Path(INSTALL_LOCATION)
+
+        self.post_sam = False
+
+    def keyPressEvent(self, event: QKeyEvent):
+        if event.key() == Qt.Key.Key_Escape:
+            self.menu_dialog.show()
+
+        elif event.key() == Qt.Key.Key_Period:
+            self.mark_save(self.current_img_index)
+
+        elif event.key() == Qt.Key.Key_Comma:
+            self.mark_delete(self.current_img_index)
+
+        elif event.key() == Qt.Key.Key_X:
+            self.next_img()
+
+        elif event.key() == Qt.Key.Key_Z:
+            self.prev_img()
+
+        elif event.key() == Qt.Key.Key_C:
+            self.auto_skip = not self.auto_skip
+            self.image_view.autoskip_lbl.setText(f"Autoskip: {self.auto_skip}")
+
+        elif event.key() == Qt.Key.Key_V:
+            self.display_controls()
+
+        elif event.key() == Qt.Key.Key_Return:
+            if len(self.unmarked_imgs) > 0:
+                unmarked_str = "\n".join( [ str(frame.name) for frame in self.unmarked_imgs ] )
+
+                msg = QMessageBox(self)
+                msg.setWindowTitle("Notice")
+                msg.setText("The following frames have not been marked yet.")
+                msg.setInformativeText("Please go back and mark them or choose from one of the following other options:")
+                msg.setDetailedText(unmarked_str)
+                msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+                delete_button = msg.addButton("Mark frames for Deletion", QMessageBox.ButtonRole.ActionRole)
+                save_button = msg.addButton("Mark frames for Saving", QMessageBox.ButtonRole.ActionRole)
+                msg.setDefaultButton(QMessageBox.StandardButton.Ok)
+                msg.exec()
+
+                if msg.clickedButton() == delete_button:
+                    self.mark_all(self.unmarked_imgs, "delete")
+                elif msg.clickedButton() == save_button:
+                    self.mark_all(self.unmarked_imgs, "save")
+
+            else:
+                self.finish_and_delete()
+
+    def display_controls(self):
+        self.ctrls.exec()
+
+    def begin_post_sam_pass(self, prj, user, uuid):
+        self.setFocus()
+        self.activateWindow()
+        self.current_user = user
+        self.current_uuid = uuid
+        self.current_project = prj
+
+        self.sam_labels = Path(prj) / "image_labels" / "sam_labels.json"
+        self.tmp_sam_labels = Path(prj) / "auto_sam_isolated" / "sam_labels.json"
+        self.post_sam = True
+
+        # masks are saved to auto_sam_isolated / parent(singlet_images or video_name) / imgname / imgname.ext
+        # perchance just grab all images in auto_sam_isolated
+        needs_sp = []
+        for i in Path(prj / "auto_sam_isolated").rglob("*"):
+            if i.is_file() and i.suffix in IMAGE_EXTENSIONS:
+                needs_sp.append(i)
+
+        if len(needs_sp) == 0:
+            self.controller.switch_page(2)
             return
 
-        
+        self.all_input_imgs = needs_sp.copy()
+        self.unmarked_imgs = needs_sp.copy()
+
+        self.imgs_remaining_lbl.setText(f"Unmarked frames: {len(self.unmarked_imgs)}")
+
+        self.ctrls.exec()
+        self.show_img(0)
+
+    def begin_pass(self, needs_fp, prj, user, uuid):
+        self.setFocus()
+        self.activateWindow()
+        self.current_user = user
+        self.current_uuid = uuid
+        self.current_project = prj
+
+        self.needs_fp_file = Path(prj) / "needs_first_pass.txt"
+
+        if len(needs_fp) == 0:
+            self.controller.switch_page(2)
+            return
+
+        self.all_input_imgs = needs_fp.copy()
+        self.unmarked_imgs = needs_fp.copy()
+
+        self.imgs_remaining_lbl.setText(f"Unmarked frames: {len(self.unmarked_imgs)}")
+
+        self.ctrls.exec()
+        self.show_img(0)
+
+    def mark_all(self, remaining_imgs, option):
+        if option == "delete":
+            self.marked_del.extend(remaining_imgs)
+        else:
+            self.marked_save.extend(remaining_imgs)
+
+        self.unmarked_imgs.clear()
+        self.update_ui()
+
+    def mark_delete(self, img_idx):
+        img = self.all_input_imgs[img_idx]
+        if img in self.marked_save:
+            self.marked_save.remove(img)
+        if img not in self.marked_del:
+            self.marked_del.append(img)
+        if img in self.unmarked_imgs:
+            self.unmarked_imgs.remove(img)
+
+        if (len(self.unmarked_imgs) > 0 and self.auto_skip and self.current_img_index < (len(self.all_input_imgs) - 1)):
+            self.show_img(self.current_img_index + 1)
+
+        else:
+            self.show_img(self.current_img_index)
+
+        self.update_ui()
+
+    def mark_save(self, img_idx):
+        img = self.all_input_imgs[img_idx]
+        if img in self.marked_del:
+            self.marked_del.remove(img)
+        if img not in self.marked_save:
+            self.marked_save.append(img)
+        if img in self.unmarked_imgs:
+            self.unmarked_imgs.remove(img)
+        self.image_view.set_mark_status("save")
+
+        if (len(self.unmarked_imgs) > 0 and self.auto_skip and self.current_img_index < (len(self.all_input_imgs) - 1)):
+            self.show_img(self.current_img_index + 1)
+
+        else:
+            self.show_img(self.current_img_index)
+
+        self.update_ui()
+
+    def show_img(self, index):
+        self.current_img_index = index
+        img = self.all_input_imgs[index]
+
+        if img in self.marked_del:
+            self.image_view.set_mark_status("delete")
+        elif img in self.marked_save:
+            self.image_view.set_mark_status("save")
+        else:
+            self.image_view.set_mark_status(None)
+
+        self.image_view.view_image(img, self.current_project, self.all_input_imgs)
+
+    def next_img(self):
+        if self.current_img_index < (len(self.all_input_imgs) - 1):
+            self.show_img(self.current_img_index + 1)
+        self.update_ui()
+
+    def prev_img(self):
+        if self.current_img_index >= 1:
+            self.show_img(self.current_img_index - 1)
+        self.update_ui()
+
+    def discard_and_quit(self):
+        reply = QMessageBox.question(
+            self,
+            "Discard Changes and Quit",
+            "Are you sure you want to exit without deleting? "
+            "Your choices will be reset!",
+            QMessageBox.StandardButton.Yes |
+            QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+
+            self.return_to_project()
+
+    def update_ui(self):
+        if not self.all_input_imgs:
+            return
+
+        self.current_video = self.all_input_imgs[self.current_img_index].parent
+        if len(self.unmarked_imgs) > 0:
+            self.imgs_remaining_lbl.setText(f"Unmarked frames: {len(self.unmarked_imgs)}")
+        else:
+            self.imgs_remaining_lbl.setText("All frames marked! Press Enter to confirm selection.")
+
+    def save_and_quit(self):
+        reply = QMessageBox.question(
+            self,
+            "Delete and Quit",
+            "Are you sure you want to remove these frames from the project? They will be gone forever unless the whole video is reuploaded. Frames marked for saving will be saved as well.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            self.delete_frames()
+            self.return_to_project()
+
+    def finish_and_delete(self):
+        for_deletion_str = "\n".join( [str(img) for img in self.marked_del] )
+
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Delete and Finish")
+        msg.setText("Are you sure you want to remove the marked for deletion frames from the project?")
+        msg.setInformativeText("These images will be gone unless the video is reuploaded(if this is a post SAM pass, the masks will be deleted forever)")
+        msg.setDetailedText(for_deletion_str)
+        msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
+        msg.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        reply = msg.exec()
+        if reply == QMessageBox.StandardButton.Yes:
+            self.delete_frames()
+            self.return_to_project()
+
+    def delete_frames(self):
+        marked = self.marked_del + self.marked_save
+        if not self.post_sam:
+            lines = self.needs_fp_file.read_text().strip().splitlines()
+            marked_paths = { Path(img).resolve().relative_to(self.current_project.resolve()).as_posix() for img in marked }
+
+            lines = [ line for line in lines if Path(line).as_posix() not in marked_paths ]
+            self.needs_fp_file.write_text("\n".join(lines))
+
+        image_uploads = self.current_project / "image_uploads"
+        image_labels = self.current_project / "image_labels"
+
+        for img in self.marked_del:
+            img = Path(img)
+
+            if not self.post_sam:
+                try:
+                    relative_img = img.resolve().relative_to(image_uploads.resolve())
+                    label_file = image_labels / relative_img.parent / f"{relative_img.stem}.txt"
+                    label_file.unlink(missing_ok=True)
+                except ValueError:
+                    pass
+            else:
+                # remove the image from the sam labels json
+                with open(self.tmp_sam_labels, "r") as f:
+                    data = json.load(f)
+                mask_path = str(Path(img).resolve().relative_to(Path(self.current_project) / "auto_sam_isolated").as_posix())
+                corresponding_image_name = f"image_uploads/{mask_path}"
+
+                image_data = next((img2 for img2 in data["images"] if img2["image"] == corresponding_image_name), None)
+                # there should only be one object in each image at this stage
+                if image_data is not None:
+                    data.remove(image_data)
+                    obj_data = image_data.get("objects", [])
+
+                with open(self.sam_labels, "r") as f:
+                    data2 = json.load(f)
+                shutil.copytree( Path(img).resolve().relative_to(Path(self.current_project) / "auto_sam_isolated").as_posix(), (Path(self.current_project) / "sam_isolated_objects") )
+                if image_data2 is None and image_data is not None:
+                    image_data2 = image_data
+                    image_data2.append(obj_data)
+
+                else:
+                    image_data2 = next((img2 for img2 in data2["images"] if img2["images"] == corresponding_image_name), None)
+                    if image_data2 is not None:
+                        image_data2.append(obj_data)
+
+                with open(self.sam_labels, "w") as f:
+                    json.dump(data, f, indent=2, default=lambda obj: obj.tolist())
+
+            img.unlink(missing_ok=True)
+            if img in self.all_input_imgs:
+                self.all_input_imgs.remove(img)
+            if img in self.unmarked_imgs:
+                self.unmarked_imgs.remove(img)
+
+        self.marked_del.clear()
+
+    def return_to_project(self):
+        self.all_input_imgs.clear()
+        self.unmarked_imgs.clear()
+        self.marked_del.clear()
+        self.marked_save.clear()
+
+        self.controller.switch_page(2)
+
+        self.controller.home.load_saved_images(self.current_project, self.current_user, self.current_uuid)
+
+    def closeEvent(self, event):
+        self.needs_fp_file.write_text( "\n".join([ str(img) for img in self.all_input_imgs ]) )
+
+        if len(self.marked_del) > 0 or len(self.marked_save) > 0:
+            reply = QMessageBox.question(
+                self,
+                "Exit First Pass",
+                "You have marked frames for deletion or saving. Are you sure you want to exit? Your choices will be lost.",
+                QMessageBox.StandardButton.Yes |
+                QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+
+            if reply == QMessageBox.StandardButton.Yes:
+                self.hide()
+                event.accept()
+            else:
+                event.ignore()
+        else:
+            event.accept()
+
+    # UNUSED
+    def cancel_this_video(self):
+        reply = QMessageBox.question(
+            self,
+            "Remove Video from Project",
+            f"Are you sure you want to remove video "
+            f"'{self.current_video.name}' from the project, "
+            f"which will also remove all of its image frames? "
+            f"Any labels existing for any of these frames will be lost!",
+            QMessageBox.StandardButton.Yes |
+            QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            video_imgs = [ img for img in self.all_input_imgs if img.parent == self.current_video ]
+            self.delete_video(video_imgs)
+
+        self.update_ui()
+
+    def delete_video(self, video_frames):
+        lines = (self.needs_fp_file.read_text().strip().splitlines())
+        video_paths = { Path(img).resolve().relative_to(self.current_project.resolve()).as_posix() for img in video_frames }
+        lines = [ line for line in lines if Path(line).as_posix() not in video_paths ]
+
+        try:
+            shutil.rmtree(self.current_video)
+        except OSError:
+            pass
