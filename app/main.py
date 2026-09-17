@@ -1,8 +1,11 @@
-from PySide6.QtWidgets import QApplication, QWidget, QPushButton, QMainWindow, QHBoxLayout, QVBoxLayout, QStackedWidget
-from PySide6.QtCore import Qt
-import sys
+import sys, os
+os.environ["QT_LOGGING_RULES"] = "qt.multimedia.ffmpeg=false"
+
 import json
 from pathlib import Path
+
+from PySide6.QtWidgets import QApplication, QWidget, QPushButton, QMainWindow, QHBoxLayout, QVBoxLayout, QStackedWidget
+from PySide6.QtCore import Qt
 
 from login import LoginWindow, NewAccountWindow
 from imgutil import ImageContainer
@@ -146,6 +149,7 @@ class MainController(QMainWindow):
 
 
 if __name__ == "__main__":
+
     app = QApplication(sys.argv)
     screen = app.primaryScreen()
     size = screen.size()

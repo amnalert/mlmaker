@@ -16,7 +16,6 @@ from sam_handling import SAMPass
 INSTALL_LOCATION = Path(__file__).resolve().parent.parent
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
-
 class ProjectLoadWorker(QObject):
     finished = Signal(object, object, object, object)
     failed = Signal(str)
@@ -83,38 +82,35 @@ class ProjectLoadWorker(QObject):
                 except ValueError:
                     pass
 
-            sam_labels_file = self.project_folder / "image_labels" / "sam_labels.json"
-            sam_images = []
-            if sam_labels_file.exists():
-                try:
-                    with open(sam_labels_file, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                    sam_images = data.get("images", []) if isinstance(data, dict) else []
-                except (OSError, ValueError, json.JSONDecodeError):
-                    sam_images = []
+            #sam_labels_file = self.project_folder / "image_labels" / "sam_labels.json"
+            #sam_images = []
+            #if sam_labels_file.exists():
+            #    try:
+            #        with open(sam_labels_file, "r", encoding="utf-8") as f:
+            #            data = json.load(f)
+            #        sam_images = data.get("images", []) if isinstance(data, dict) else []
+            #    except (OSError, ValueError, json.JSONDecodeError):
+            #        sam_images = []
 
-            valid_images = []
+            #valid_images = []
 
-            for image in images:
-                resolved = image.resolve()
-                img_path = resolved.relative_to(self.project_folder.resolve()).as_posix()
-                current_image = next(
-                    (img for img in sam_images if isinstance(img, dict) and img.get("image") == img_path),
-                    None
-                )
+            #for image in images:
+            #    resolved = image.resolve()
+            #    img_path = resolved.relative_to(self.project_folder.resolve()).as_posix()
+            #    current_image = next((img for img in sam_images if isinstance(img, dict) and img.get("image") == img_path), None)
 
-                if current_image is None or not current_image.get("objects"):
-                    if resolved not in needs_fp_set:
-                        needs_fp_set.add(resolved)
-                        needs_fp.append(resolved)
-                        try:
-                            relative_needs_fp.append(str(resolved.relative_to(self.project_folder)))
-                        except ValueError:
-                            relative_needs_fp.append(str(resolved))
-                else:
-                    valid_images.append(image)
+                #if current_image is None or not current_image.get("objects"):
+                #    if resolved not in needs_fp_set:
+                #        needs_fp_set.add(resolved)
+                #        needs_fp.append(resolved)
+                #        try:
+                #            relative_needs_fp.append(str(resolved.relative_to(self.project_folder)))
+                #        except ValueError:
+                #            relative_needs_fp.append(str(resolved))
+                #else:
+                #    valid_images.append(image)
 
-            images = sorted(valid_images, key=lambda p: p.as_posix().lower())
+            images = sorted(images, key=lambda p: p.as_posix().lower())
             needs_fp = sorted(needs_fp, key=lambda p: p.as_posix().lower())
             self.needs_fp_file.write_text("\n".join(dict.fromkeys(relative_needs_fp)), encoding="utf-8")
 
@@ -405,7 +401,24 @@ class ProjectView(QMainWindow):
     @Slot(object, object, object, object)
     def _images_loaded(self, images, needs_fp, project_classes, labels_folder):
         self.images = [ Path(image) for image in images if Path(image).is_file() ]
-        self.needs_fp = [ Path(image) for image in needs_fp if Path(image).is_file() ]
+
+        raw = self.needs_fp_file.read_text(errors="ignore").strip()
+        self.needs_fp = []
+
+        if raw:
+            for line in raw.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+
+                path = Path(line)
+                if not path.is_absolute():
+                    path = self.current_project / path
+
+                path = path.resolve()
+
+                if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS:
+                    self.needs_fp.append(path)
 
         self._needs_fp_set = {path.resolve() for path in self.needs_fp}
 
@@ -470,16 +483,9 @@ class ProjectView(QMainWindow):
         self.update_image_page()
 
     def finish_loading_images(self, images):
-        self.images = [
-            Path(image)
-            for image in images
-            if Path(image).is_file()
-            and Path(image).resolve() not in self._needs_fp_set
-        ]
+        self.images = [ Path(image) for image in images if Path(image).is_file() and Path(image).resolve() not in self._needs_fp_set ]
 
-        self.images.sort(
-            key=lambda p: p.as_posix().lower()
-        )
+        self.images.sort(key=lambda p: p.as_posix().lower())
 
         self.current_page = 0
         self.update_image_page()
@@ -490,11 +496,7 @@ class ProjectView(QMainWindow):
 
         self.clear_img_grid()
 
-        self.images = [
-            image for image in self.images
-            if image.is_file()
-            and image.resolve() not in self._needs_fp_set
-        ]
+        self.images = [ image for image in self.images if image.is_file() and image.resolve() not in self._needs_fp_set ]
 
         page_start = self.current_page * self.images_per_page
         page_end = page_start + self.images_per_page
@@ -515,15 +517,8 @@ class ProjectView(QMainWindow):
         num_images = len(display_items)
         columns = max(1, math.ceil(math.sqrt(num_images)))
 
-        area_width = max(
-            100,
-            self.scroll_imgs.viewport().width() - 10
-        )
-
-        thumb_width = max(
-            50,
-            area_width // columns
-        )
+        area_width = max(100, self.scroll_imgs.viewport().width() - 10)
+        thumb_width = max(50, area_width // columns)
 
         thumb_height = thumb_width
 
@@ -532,20 +527,9 @@ class ProjectView(QMainWindow):
             column = index % columns
 
             if image == self.folder_icon:
-                self._add_needs_fp_widget(
-                    row,
-                    column,
-                    thumb_width,
-                    thumb_height
-                )
+                self._add_needs_fp_widget(row, column, thumb_width, thumb_height)
             else:
-                self._add_image_widget(
-                    image,
-                    row,
-                    column,
-                    thumb_width,
-                    thumb_height
-                )
+                self._add_image_widget(image, row, column, thumb_width, thumb_height)
 
         self.update_pagination_controls()
 
@@ -557,15 +541,10 @@ class ProjectView(QMainWindow):
 
         info = QHBoxLayout()
         info.setContentsMargins(0, 0, 0, 0)
-
-        info.addWidget(
-            QLabel(f"Images Needing SAM Pass: {len(self.needs_fp)}")
-        )
+        info.addWidget(QLabel(f"Images Needing SAM Pass: {len(self.needs_fp)}"))
 
         delete_button = QPushButton("Delete")
-        delete_button.clicked.connect(
-            self.delete_all_needs_fp_images
-        )
+        delete_button.clicked.connect(self.delete_all_needs_fp_images)
         info.addWidget(delete_button)
 
         layout.addLayout(info)
@@ -618,9 +597,12 @@ class ProjectView(QMainWindow):
 
         label_file = self._label_path_for_image(image)
         label_file_sam = Path(self.current_project) / "image_labels" / "sam_labels.json"
-
-        with open(label_file_sam, "r") as f:
-            data = json.load(f)
+        label_file_sam.touch()
+        try:
+            with open(label_file_sam, "r") as f:
+                data = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            data = {}
 
         label_count = 0
 

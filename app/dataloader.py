@@ -205,41 +205,9 @@ class UploadFiles(QPushButton):
 
         self._current_video = Path(video_path)
 
-        input_name, ok = QInputDialog.getText(
-            self,
-            "Video Name",
-            "Please enter a unique video name "
-            "(leave blank for video original name, "
-            "but preferably describe the video contents "
-            "with the name):",
-            QLineEdit.EchoMode.Normal,
-            output_name if output_name else ""
-        )
-
-        if not ok:
-            QMessageBox.information(
-                self,
-                "Cancelled",
-                f"Video upload cancelled: "
-                f"{video_path.stem}"
-            )
-
-            self._video_processing = False
-            self._current_video = None
-
-            QTimer.singleShot(
-                0,
-                self._process_next_video
-            )
-
-            return
-
-        if input_name.strip() == "":
-            input_name = output_name
-
         resolved_name = (
             self._resolve_video_name(
-                input_name.strip()
+                output_name.strip()
             )
         )
 
@@ -291,76 +259,76 @@ class UploadFiles(QPushButton):
 
         self._current_video_directory = dest_path
 
-        frame_keep, ok = QInputDialog.getInt(
-            self,
-            "Frame Keep Percentage",
-            "Choose % of frames to keep "
-            "(0-100, where 0 is delete the video "
-            "and 100 is keep all frames):",
-            value=100,
-            minValue=0,
-            maxValue=100,
-            step=5
-        )
+        #frame_keep, ok = QInputDialog.getInt(
+        #    self,
+        #    "Frame Keep Percentage",
+        #    "Choose % of frames to keep "
+        #    "(0-100, where 0 is delete the video "
+        #    "and 100 is keep all frames):",
+        #    value=100,
+        #    minValue=0,
+        #    maxValue=100,
+        #    step=5
+        #)
 
-        if not ok:
-            QMessageBox.information(
-                self,
-                "Cancelled",
-                f"Video upload cancelled: "
-                f"{video_path.stem}"
-            )
+        #if not ok:
+        #    QMessageBox.information(
+        #        self,
+        #        "Cancelled",
+        #        f"Video upload cancelled: "
+        #        f"{video_path.stem}"
+        #    )
 
-            try:
-                if dest_path.exists():
-                    shutil.rmtree(dest_path)
-            except OSError:
-                pass
+        #    try:
+        #        if dest_path.exists():
+        #            shutil.rmtree(dest_path)
+        #    except OSError:
+        #        pass
 
-            self._video_processing = False
-            self._current_video = None
-            self._current_video_directory = None
+        #    self._video_processing = False
+        #    self._current_video = None
+        #    self._current_video_directory = None
 
-            QTimer.singleShot(
-                0,
-                self._process_next_video
-            )
+        #    QTimer.singleShot(
+        #        0,
+        #        self._process_next_video
+        #    )
 
-            return
+        #    return
 
-        if frame_keep == 0:
-            print(
-                f"[VideoConverter] Frame keep percentage "
-                f"is 0. Skipping video: "
-                f"{destination_video}"
-            )
+        #if frame_keep == 0:
+        #    print(
+        #        f"[VideoConverter] Frame keep percentage "
+        #        f"is 0. Skipping video: "
+        #        f"{destination_video}"
+        #    )
 
-            try:
-                if dest_path.exists():
-                    shutil.rmtree(dest_path)
-            except OSError as e:
-                print(
-                    f"[VideoConverter] Could not remove "
-                    f"skipped video: {e}"
-                )
+        #    try:
+        #        if dest_path.exists():
+        #            shutil.rmtree(dest_path)
+        #    except OSError as e:
+        #        print(
+        #            f"[VideoConverter] Could not remove "
+        #            f"skipped video: {e}"
+        #        )
 
-            self._video_processing = False
-            self._current_video = None
-            self._current_video_directory = None
+        #    self._video_processing = False
+        #    self._current_video = None
+        #    self._current_video_directory = None
 
-            QTimer.singleShot(
-                0,
-                self._process_next_video
-            )
+        #    QTimer.singleShot(
+        #        0,
+        #        self._process_next_video
+        #    )
 
-            return
+        #    return
 
         self._video_thread = QThread(self)
 
         self._video_worker = VideoConvertWorker(
             destination_video,
             project_path,
-            frame_keep,
+            10,
             resolved_name
         )
 

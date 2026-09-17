@@ -3,3 +3,5 @@ users/
 app/__pycache__/
 assets/music/
 app/packages/
+isolated/
+isolated_back/

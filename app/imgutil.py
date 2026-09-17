@@ -705,6 +705,8 @@ class ImageLabellingControls(QWidget):
                 elif self.annotation_type == "SAM": 
                     for sam_label in self.contours_list:
                         self._draw_sam_from_label(painter, sam_label, QColor("#00ff00"), 2)
+                    if self.is_previewing:
+                        self._draw_sam_from_label(painter, sam_label, QColor("#0000ff"), 2)
 
                     for index, point in enumerate(self.sam_points):
                         px = point[0]
@@ -1770,6 +1772,8 @@ class FirstPass(QWidget):
 
         self.sam_labels = Path(prj) / "image_labels" / "sam_labels.json"
         self.tmp_sam_labels = Path(prj) / "auto_sam_isolated" / "sam_labels.json"
+        self.tmp_sam_labels.parent.mkdir(parents=True, exist_ok=True)
+        self.tmp_sam_labels.touch()
         self.post_sam = True
 
         # masks are saved to auto_sam_isolated / parent(singlet_images or video_name) / imgname / imgname.ext
